@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "studio",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 5173
+    },
+    {
+      "name": "studio-mock",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--input-type=module", "-e", "process.env.MOCK_PROVIDER='1'; await import('./scripts/dev.mjs')"],
+      "port": 5173
+    }
+  ]
+}
