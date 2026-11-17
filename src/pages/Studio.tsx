@@ -11,6 +11,7 @@ type Kind = 'video' | 'image'
 type SelectedImage = PickedImage
 type Favorite = (assetId: number, value: boolean) => Promise<void>
 type Rename = (assetId: number, name: string) => Promise<void>
+type SettingName = 'model' | 'format' | 'count'
 type MentionOption = {
   key: string
   label: string
@@ -90,7 +91,8 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
   const [characters, setCharacters] = useState<Character[]>([])
   const [promptCharacters, setPromptCharacters] = useState<number[]>([])
   const [editingCharacter, setEditingCharacter] = useState<Character | null | 'new'>(null)
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  // Which settings popover is open above the prompt: model, format (shape · resolution · length) or count.
+  const [openSetting, setOpenSetting] = useState<SettingName | null>(null)
   const workspace = useRef<HTMLDivElement>(null)
   const composerDock = useRef<HTMLDivElement>(null)
   const panelBody = useRef<HTMLDivElement>(null)
@@ -113,17 +115,26 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
     return () => observer.disconnect()
   }, [])
 
-  const settingsTrigger = useRef<HTMLButtonElement>(null)
-  const settingsPanel = useRef<HTMLElement>(null)
-
+  // A settings popover closes on Esc or a click anywhere but its chip or itself, and opens on its current choice.
   useEffect(() => {
-    if (settingsOpen) settingsPanel.current?.querySelector<HTMLInputElement>('input[name="generation-model"]:checked')?.focus()
-  }, [settingsOpen])
-
-  function closeSettings() {
-    setSettingsOpen(false)
-    settingsTrigger.current?.focus()
-  }
+    if (!openSetting) return
+    document.querySelector<HTMLElement>('.setting-pop [aria-pressed="true"]')?.focus()
+    const down = (event: MouseEvent) => {
+      if (!(event.target as Element).closest?.('.setting-pop, .setting-chip')) setOpenSetting(null)
+    }
+    const key = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setOpenSetting(null)
+      document.querySelector<HTMLElement>(`.setting-chip[data-setting="${openSetting}"]`)?.focus()
+    }
+    document.addEventListener('mousedown', down)
+    document.addEventListener('keydown', key)
+    return () => {
+      document.removeEventListener('mousedown', down)
+      document.removeEventListener('keydown', key)
+    }
+  }, [openSetting])
+  const toggleSetting = (name: SettingName) => setOpenSetting((open) => open === name ? null : name)
   const [kind, setKind] = useState<Kind>('video')
   const [params, setParams] = useState<Params>(DEFAULTS.video)
   const [prompt, setPrompt] = useState('')
@@ -498,7 +509,7 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
 
   function openLibrary() {
     setError('')
-    setSettingsOpen(false)
+    setOpenSetting(null)
     setPickerOpen(true)
   }
 
@@ -867,7 +878,7 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
 
   async function generate() {
     if (busy !== null || !prompt.trim() || !enough || !withinToday || !enoughReferences) return
-    setSettingsOpen(false)
+    setOpenSetting(null)
     setBusy('generate')
     setError('')
     // Show a card right away: the content check and job setup take a few seconds.
@@ -928,6 +939,40 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
   const enough = cost == null || cost <= me.balance
   const withinToday = cost == null || left == null || cost <= left
   const modelLabel = models.find((model) => model.model_key === params.modelKey)?.label ?? params.modelKey
+
+  // Settings chips: every model of this kind is listed; ones that can't do the current job are greyed with why.
+  const showRes = (r: string) => r === '4k' ? '4K' : r
+  const settingModels = me.pricing.filter((p) => p.kind === kind).map((p) => {
+    const c = p.caps
+    const blocked = usesReferences && c?.referenceDuration === undefined ? 'No Ingredients'
+      : usesFrames && !c?.endFrameDuration ? 'No end frame'
+      : editing && !canEditVideo(p.model_key) ? 'Can’t edit video' : null
+    const tags = p.kind !== 'video' || !c ? [] : [
+      c.resolutions.length > 1 ? `${showRes(c.resolutions[0])}–${showRes(c.resolutions[c.resolutions.length - 1])}` : showRes(c.resolutions[0]),
+      `${c.seconds.min}–${c.seconds.max}s`,
+      ...(c.endFrameDuration ? ['Start → End'] : []),
+      ...(c.referenceDuration !== undefined ? ['Ingredients'] : []),
+      ...(canEditVideo(p.model_key) ? ['Edit video'] : []),
+    ]
+    return { key: p.model_key, label: p.label, price: modelPrice(p), tags, blocked }
+  })
+  const showAspect = editImages.length === 0
+  const aspectOptions = caps?.autoAspect ? ['auto', '16:9', '9:16'] as const : ['16:9', '9:16'] as const
+  const lengthOptions: number[] = []
+  if (caps) for (let s = caps.seconds.min; s <= maxSeconds; s += caps.seconds.step) lengthOptions.push(s)
+  const lengthLocked = fullLength || editing
+  const lengthNote = editing ? 'An edit keeps the clip’s length.'
+    : typeof referenceDuration === 'number' ? `Ingredients on this model make ${referenceDuration}-second clips.`
+    : usesFrames && typeof caps?.endFrameDuration === 'number' ? `Start → End on this model is ${caps.endFrameDuration} seconds.`
+    : fullLength ? `${showRes(params.resolution ?? '')} is ${params.durationSeconds} seconds only on this model.`
+    : source && caps && caps.seconds.maxFromSource < caps.seconds.max ? `Up to ${maxSeconds} seconds when continuing a clip.`
+    : 'Only the lengths this model can make.'
+  const formatLabel = kind === 'video'
+    ? `${params.aspectRatio === 'auto' ? 'Auto' : params.aspectRatio} · ${showRes(params.resolution ?? '720p')} · ${params.durationSeconds ?? 4}s`
+    : params.aspectRatio === 'auto' ? 'Auto' : params.aspectRatio
+  const showFormat = kind === 'video' || showAspect
+  const showCount = !(kind === 'video' && editing)
+  const countValue = kind === 'video' ? videoCount : params.count ?? 1
   const currentCollection = collections.find((item) => item.id === activeCollection)
   const collectionLoading = activeCollection !== null && collectionMedia?.id !== activeCollection
   const inBin = mediaFilter === 'bin'
@@ -1183,83 +1228,6 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
             </div>
           )}
 
-          {settingsOpen && (
-            <section className="flow-settings" id="generation-settings" ref={settingsPanel} aria-label="Generation settings"
-              onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); closeSettings() } }}>
-              <div className="flow-settings-heading"><strong>Generation settings</strong><button className="btn sm ghost" onClick={closeSettings}>Done</button></div>
-              <div className="seg full">
-                <button className={kind === 'video' ? 'on' : ''} onClick={() => switchKind('video')}>Video</button>
-                <button className={kind === 'image' ? 'on' : ''} onClick={() => switchKind('image')}>Image</button>
-              </div>
-              <div className="flow-settings-columns">
-                <fieldset className="flow-model-options">
-                  <legend>Model</legend>
-                  {models.map((model) => (
-                    <label className="flow-model-option" key={model.model_key}>
-                      <input type="radio" name="generation-model" value={model.model_key} checked={params.modelKey === model.model_key}
-                        onChange={() => set({ modelKey: model.model_key })} />
-                      <span className="flow-model-option-copy"><b>{model.label}</b><small>{modelPrice(model)}</small></span>
-                      <span className="flow-model-mark" aria-hidden="true">✓</span>
-                    </label>
-                  ))}
-                </fieldset>
-                <div className="settings-grid">
-                  {kind === 'image' && (
-                    <div className="field" style={{ gridColumn: '1 / -1' }}>
-                      <span>Images</span>
-                      <div className="seg full">
-                        {[1, 2, 3, 4].map((n) => <button key={n} className={params.count === n ? 'on' : ''} onClick={() => set({ count: n })}>×{n}</button>)}
-                      </div>
-                    </div>
-                  )}
-                  {editImages.length === 0 && <div className="field" style={kind === 'video' ? { gridColumn: '1 / -1' } : undefined}>
-                    <span>Aspect ratio</span>
-                    <div className="seg full">
-                      {(caps?.autoAspect ? ['auto', '16:9', '9:16'] as const : ['16:9', '9:16'] as const).map((a) => (
-                        <button key={a} className={params.aspectRatio === a ? 'on' : ''} title={a === 'auto' ? 'Let the model choose the shape' : undefined} onClick={() => set({ aspectRatio: a })}>{a === 'auto' ? 'Auto' : a}</button>
-                      ))}
-                    </div>
-                  </div>}
-                  {kind === 'video' && (
-                    <>
-                      <div className="field" style={{ gridColumn: '1 / -1' }}>
-                        <span>Resolution{fullLength && !usesReferences ? ` · ${params.resolution === '4k' ? '4K' : params.resolution} is ${maxSeconds}s only on Veo` : ''}</span>
-                        <div className="seg full">
-                          {(caps?.resolutions ?? ['720p']).map((r) => (
-                            <button key={r} className={params.resolution === r ? 'on' : ''} onClick={() => set({ resolution: r })}>{r === '4k' ? '4K' : r}</button>
-                          ))}
-                        </div>
-                      </div>
-                      {!editing && (
-                        <div className="field" style={{ gridColumn: '1 / -1' }}>
-                          <span>Videos</span>
-                          <div className="seg full">
-                            {[1, 2, 3, 4].map((n) => <button key={n} className={videoCount === n ? 'on' : ''} aria-pressed={videoCount === n} onClick={() => set({ count: n })}>×{n}</button>)}
-                          </div>
-                        </div>
-                      )}
-                      <div className="field" style={{ gridColumn: '1 / -1' }}>
-                        <span>Video duration{editing ? ' · an edit keeps the clip’s length' : source && caps && caps.seconds.maxFromSource < caps.seconds.max ? ` · up to ${maxSeconds}s when continuing a clip` : ''}</span>
-                        <div className="row">
-                          <input type="range" min={caps?.seconds.min ?? 3} max={maxSeconds} step={caps?.seconds.step ?? 1} disabled={fullLength || editing}
-                            style={{ flex: 1 }} value={params.durationSeconds ?? 8}
-                            onChange={(e) => set({ durationSeconds: Number(e.target.value) })} />
-                          <span className="num strong" style={{ minWidth: 32, textAlign: 'right' }}>{params.durationSeconds}s</span>
-                        </div>
-                      </div>
-                      <div className="field" style={{ gridColumn: '1 / -1' }}>
-                        <span>Frame rate</span>
-                        <select className="input" disabled style={{ opacity: 0.55, cursor: 'not-allowed' }} value="24" title="Video renders at 24 fps">
-                          <option value="24">24fps</option>
-                        </select>
-                      </div>
-                    </>
-                  )}
-                </div>
-              </div>
-            </section>
-          )}
-
           {check && !check.allowed && (
             <div className="notice danger">
               <div className="col" style={{ gap: 8, flex: 1 }}>
@@ -1313,9 +1281,116 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
               }}
             />
             {uploading && !modalOpen && <span className="faint small composer-uploading">Uploading image…</span>}
+            {openSetting === 'model' && (
+              <div className="setting-pop" role="dialog" aria-label="Model">
+                <div className="setting-pop-head"><span className="setting-label">Model</span>
+                  <span className="faint small">{kind === 'video' ? 'Price per second at 720p' : 'Price per image'}</span></div>
+                <div className="setting-models">
+                  {settingModels.map((m) => (
+                    <button key={m.key} type="button" className={`setting-model${m.key === params.modelKey ? ' on' : ''}`} aria-pressed={m.key === params.modelKey}
+                      disabled={!!m.blocked} title={m.blocked ?? undefined} onClick={() => { set({ modelKey: m.key }); setOpenSetting(null) }}>
+                      <span className="setting-model-copy">
+                        <b>{m.label}</b>
+                        {(m.tags.length > 0 || m.blocked) && (
+                          <span className="setting-tags">
+                            {m.blocked && <span className="setting-tag warn">{m.blocked}</span>}
+                            {m.tags.map((tag) => <span className="setting-tag" key={tag}>{tag}</span>)}
+                          </span>
+                        )}
+                      </span>
+                      <span className="faint small">{m.price}</span>
+                      <span className="setting-check" aria-hidden="true">{m.key === params.modelKey ? '✓' : ''}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {openSetting === 'format' && showFormat && (
+              <div className="setting-pop setting-pop-format" role="dialog" aria-label="Format">
+                {showAspect && (
+                  <div className="setting-group">
+                    <span className="setting-label">Aspect ratio</span>
+                    <div className="setting-opts">
+                      {aspectOptions.map((a) => (
+                        <button key={a} type="button" className={params.aspectRatio === a ? 'on' : ''} aria-pressed={params.aspectRatio === a}
+                          title={a === 'auto' ? 'Let the model choose the shape' : undefined} onClick={() => set({ aspectRatio: a })}>{a === 'auto' ? 'Auto' : a}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {kind === 'video' && (
+                  <>
+                    <div className="setting-group">
+                      <span className="setting-label">Resolution</span>
+                      <div className="setting-opts">
+                        {(caps?.resolutions ?? ['720p']).map((r) => (
+                          <button key={r} type="button" className={params.resolution === r ? 'on' : ''} aria-pressed={params.resolution === r}
+                            onClick={() => set({ resolution: r })}>{showRes(r)}</button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="setting-group">
+                      <span className="setting-label">Length</span>
+                      <div className="setting-opts setting-lengths">
+                        {lengthOptions.map((n) => (
+                          <button key={n} type="button" className={params.durationSeconds === n ? 'on' : ''} aria-pressed={params.durationSeconds === n}
+                            disabled={lengthLocked && params.durationSeconds !== n} onClick={() => set({ durationSeconds: n })}>{n}s</button>
+                        ))}
+                      </div>
+                      <span className="faint small">{lengthNote}</span>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+            {openSetting === 'count' && showCount && (
+              <div className="setting-pop setting-pop-count" role="dialog" aria-label={kind === 'video' ? 'Videos' : 'Images'}>
+                <span className="setting-label">{kind === 'video' ? 'Videos' : 'Images'}</span>
+                <div className="setting-opts">
+                  {[1, 2, 3, 4].map((n) => (
+                    <button key={n} type="button" className={countValue === n ? 'on' : ''} aria-pressed={countValue === n}
+                      onClick={() => { set({ count: n }); setOpenSetting(null) }}>×{n}</button>
+                  ))}
+                </div>
+                <span className="faint small">Each one is charged.</span>
+              </div>
+            )}
             <div className="flow-composer-actions">
               <button className="icon-btn" type="button" title="Add media to prompt" aria-label="Add media to prompt"
                 disabled={busy !== null} onClick={openLibrary}><span aria-hidden="true">+</span></button>
+              <div className="kind-seg" role="group" aria-label="Make a video or an image">
+                <button type="button" className={kind === 'video' ? 'on' : ''} aria-pressed={kind === 'video'} disabled={busy !== null}
+                  onClick={() => { switchKind('video'); setOpenSetting(null) }}>Video</button>
+                <button type="button" className={kind === 'image' ? 'on' : ''} aria-pressed={kind === 'image'} disabled={busy !== null}
+                  onClick={() => { switchKind('image'); setOpenSetting(null) }}>Image</button>
+              </div>
+              <button type="button" className={`setting-chip${openSetting === 'model' ? ' open' : ''}`} data-setting="model"
+                aria-expanded={openSetting === 'model'} disabled={busy !== null} onClick={() => toggleSetting('model')}>
+                <span className="setting-chip-text">{modelLabel}</span><span aria-hidden="true">⌄</span>
+              </button>
+              {showFormat && (
+                <button type="button" className={`setting-chip${openSetting === 'format' ? ' open' : ''}`} data-setting="format"
+                  aria-expanded={openSetting === 'format'} aria-label={`Format: ${formatLabel}`} disabled={busy !== null} onClick={() => toggleSetting('format')}>
+                  <span className="setting-chip-text">{formatLabel}</span><span aria-hidden="true">⌄</span>
+                </button>
+              )}
+              <div className="spacer" />
+              {showCount && (
+                <button type="button" className={`setting-chip${openSetting === 'count' ? ' open' : ''}`} data-setting="count"
+                  aria-expanded={openSetting === 'count'} aria-label={`${countValue} ${kind === 'video' ? 'video' : 'image'}${countValue > 1 ? 's' : ''}`}
+                  disabled={busy !== null} onClick={() => toggleSetting('count')}>×{countValue}</button>
+              )}
+              <button className="flow-generate" aria-label={cost == null ? 'Generate' : `Generate, about ${fmt(cost)} credits`} title="Generate (Ctrl+Enter)"
+                disabled={!canGenerate} onClick={() => generate()}>
+                <span className="num">{cost == null ? '…' : `≈ ${fmt(cost)}`}</span>
+                <span className="flow-generate-arrow" aria-hidden="true">{busy === 'generate' ? <span className="flow-spinner" /> : '→'}</span>
+              </button>
+            </div>
+            <div className="flow-credit-line small num">
+              <label className="keep-prompt small" title="Keep the prompt after Generate, to make more takes of it">
+                <input type="checkbox" checked={keepPrompt} onChange={(event) => setKeepPrompt(event.target.checked)} />
+                Keep prompt
+              </label>
               {characters.length > 0 && (
                 <select className="collection-add composer-characters" aria-label="Add a character to the prompt" value="" disabled={busy !== null}
                   onChange={(event) => { const item = characters.find((c) => c.id === Number(event.target.value)); if (item) toggleCharacter(item) }}>
@@ -1323,21 +1398,6 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
                   {characters.filter((item) => !promptCharacters.includes(item.id)).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                 </select>
               )}
-              <label className="keep-prompt small" title="Keep the prompt after Generate, to make more takes of it">
-                <input type="checkbox" checked={keepPrompt} onChange={(event) => setKeepPrompt(event.target.checked)} />
-                Keep prompt
-              </label>
-              <div className="spacer" />
-              <button className="btn sm flow-model" ref={settingsTrigger} aria-expanded={settingsOpen} aria-controls={settingsOpen ? 'generation-settings' : undefined}
-                disabled={busy !== null} onClick={() => setSettingsOpen((open) => !open)}>
-                <span>{modelLabel}</span><span className="faint">{kind === 'image' ? `×${params.count ?? 1}` : `${params.durationSeconds ?? 4}s${videoCount > 1 ? ` ×${videoCount}` : ''}`} ⌄</span>
-              </button>
-              <button className="icon-btn flow-send" aria-label="Generate" title="Generate" disabled={!canGenerate} onClick={() => generate()}>
-                {busy === 'generate' ? <span className="flow-spinner" aria-hidden="true" /> : <span aria-hidden="true">→</span>}
-              </button>
-            </div>
-            <div className="flow-credit-line small num">
-              <span className="flow-cost">{cost == null ? 'Estimating…' : `≈ ${fmt(cost)} credits`}</span>
               <span>{left != null ? `${fmt(left)} left today` : `${fmt(me.balance)} left`}</span>
               {isArabic(prompt) && <span>Arabic · translated word for word</span>}
               <span className="flow-disclaimer">AI can make mistakes</span>
