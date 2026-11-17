@@ -1,7 +1,7 @@
 // Characters: a person with a fixed look (1–3 reference images + text) and voice, reused in prompts.
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
-import { api, type Character, type Job } from '../api.ts'
+import { api, type Character, type Job, type VoiceOption } from '../api.ts'
 import { AssetPicker } from './AssetPicker.tsx'
 
 type ListProps = {
@@ -13,6 +13,14 @@ type ListProps = {
 }
 
 export function CharacterList({ characters, inPrompt, onToggle, onEdit, onDelete }: ListProps) {
+  // Re-render once the voice names arrive, so cards show "Calm narrator" instead of its id.
+  const [, setVoicesReady] = useState(false)
+  useEffect(() => {
+    if (!characters.some((character) => character.voiceId)) return
+    let current = true
+    loadVoices().then(() => { if (current) setVoicesReady(true) }).catch(() => {})
+    return () => { current = false }
+  }, [characters])
   return (
     <div className="character-grid">
       <button className="scene-card character-new" onClick={() => onEdit(null)}>＋ New character</button>
@@ -25,7 +33,11 @@ export function CharacterList({ characters, inPrompt, onToggle, onEdit, onDelete
           <div className="character-body">
             <b dir="auto">{character.name}</b>
             {character.look && <span className="small muted one-line" dir="auto" title={character.look}>{character.look}</span>}
-            {character.voice && <span className="small faint one-line" dir="auto" title={character.voice}>Voice · {character.voice}</span>}
+            {(character.voiceId || character.voice) && (
+              <span className="small faint one-line" dir="auto" title={character.voice || undefined}>
+                Voice · {[character.voiceId && voiceName(character.voiceId), character.voice].filter(Boolean).join(' · ')}
+              </span>
+            )}
             <div className="row tile-actions">
               <button className="btn sm" aria-pressed={inPrompt.includes(character.id)} onClick={() => onToggle(character)}>
                 {inPrompt.includes(character.id) ? '✓ In prompt' : 'Use in prompt'}
@@ -40,6 +52,14 @@ export function CharacterList({ characters, inPrompt, onToggle, onEdit, onDelete
   )
 }
 
+// The list is fixed on the server; it's loaded once and reused.
+let voiceList: Promise<VoiceOption[]> | null = null
+const voiceNames = new Map<string, string>()
+const loadVoices = () => (voiceList ??= api<VoiceOption[]>('/voices')
+  .then((list) => { list.forEach((voice) => voiceNames.set(voice.id, `${voice.label} · ${voice.labelAr}`)); return list })
+  .catch((err) => { voiceList = null; throw err }))
+const voiceName = (id: string) => voiceNames.get(id) ?? id
+
 type EditorProps = {
   character: Character | null
   jobs: Job[]
@@ -53,6 +73,34 @@ export function CharacterEditor({ character, jobs, uploading, onUpload, onClose,
   const [name, setName] = useState(character?.name ?? '')
   const [look, setLook] = useState(character?.look ?? '')
   const [voice, setVoice] = useState(character?.voice ?? '')
+  const [voiceId, setVoiceId] = useState<string | null>(character?.voiceId ?? null)
+  const [voices, setVoices] = useState<VoiceOption[]>([])
+  const [playing, setPlaying] = useState<string | null>(null)
+  const [loadingSample, setLoadingSample] = useState<string | null>(null)
+  const player = useRef<HTMLAudioElement | null>(null)
+  useEffect(() => {
+    let current = true
+    loadVoices().then((list) => { if (current) setVoices(list) }).catch(() => { if (current) setError('Couldn’t load the voices.') })
+    return () => { current = false; player.current?.pause() }
+  }, [])
+
+  // One sample plays at a time; the first play of a voice takes a few seconds while it's made.
+  function playSample(id: string) {
+    player.current?.pause()
+    if (playing === id) { setPlaying(null); return }
+    const audio = new Audio(`/api/voices/${id}/sample`)
+    player.current = audio
+    setLoadingSample(id)
+    setPlaying(id)
+    audio.oncanplay = () => setLoadingSample((value) => value === id ? null : value)
+    audio.onended = () => setPlaying((value) => value === id ? null : value)
+    audio.onerror = () => {
+      setLoadingSample(null)
+      setPlaying(null)
+      setError('Couldn’t play that sample. Try again.')
+    }
+    void audio.play().catch(() => {})
+  }
   const [images, setImages] = useState(character?.images ?? [])
   const [picking, setPicking] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -71,7 +119,7 @@ export function CharacterEditor({ character, jobs, uploading, onUpload, onClose,
     setBusy(true)
     setError('')
     try {
-      const body = { name, look, voice, assetIds: images.map((image) => image.assetId) }
+      const body = { name, look, voice, voiceId, assetIds: images.map((image) => image.assetId) }
       onSaved(character
         ? await api<Character>(`/characters/${character.id}`, body, 'PATCH')
         : await api<Character>('/characters', body))
@@ -107,10 +155,29 @@ export function CharacterEditor({ character, jobs, uploading, onUpload, onClose,
           <textarea className="input" dir="auto" rows={2} maxLength={800} placeholder="e.g. a man in his 40s, short grey beard, white galabiya"
             value={look} onChange={(event) => setLook(event.target.value)} />
         </label>
-        <label className="field"><span>Voice</span>
-          <textarea className="input" dir="auto" rows={2} maxLength={400} placeholder="e.g. deep, calm, slow Egyptian Arabic · صوت هادي وعميق"
+        <div className="field">
+          <span>Voice · الصوت</span>
+          <div className="voice-grid" role="radiogroup" aria-label="Voice">
+            <button type="button" role="radio" aria-checked={voiceId === null} className={`voice-option${voiceId === null ? ' on' : ''}`} onClick={() => setVoiceId(null)}>
+              <span className="voice-name"><b>No preset</b><span className="faint">Describe it below</span></span>
+            </button>
+            {voices.map((option) => (
+              <div key={option.id} className={`voice-option${voiceId === option.id ? ' on' : ''}`}>
+                <button type="button" role="radio" aria-checked={voiceId === option.id} className="voice-pick" onClick={() => setVoiceId(option.id)}>
+                  <span className="voice-name"><b>{option.label}</b><span className="faint" dir="rtl">{option.labelAr}</span></span>
+                </button>
+                <button type="button" className="voice-play" aria-label={`${playing === option.id ? 'Stop' : 'Play'} the ${option.label} sample`}
+                  onClick={() => playSample(option.id)}>
+                  {loadingSample === option.id ? <span className="flow-spinner" aria-hidden="true" /> : playing === option.id ? '■' : '▶'}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+        <label className="field"><span>{voiceId ? 'Extra voice notes (optional)' : 'Describe the voice'}</span>
+          <textarea className="input" dir="auto" rows={2} maxLength={400} placeholder={voiceId ? 'e.g. speaks Egyptian Arabic, a little slower · بيتكلم مصري' : 'e.g. deep, calm, slow Egyptian Arabic · صوت هادي وعميق'}
             value={voice} onChange={(event) => setVoice(event.target.value)} />
-          <span className="small faint">Videos describe the voice to the model; it isn’t a copy of a real person’s voice.</span>
+          <span className="small faint">The video model gets the voice as a description, so it sounds close to the sample, not identical. It isn’t a copy of a real person’s voice.</span>
         </label>
         {error && <div className="error-text" role="alert">{error}</div>}
         <div className="row">

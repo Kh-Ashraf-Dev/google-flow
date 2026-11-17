@@ -4,6 +4,7 @@ import { config } from './config.ts'
 import { audit, db, tx } from './db.ts'
 import * as ledger from './ledger.ts'
 import { frameAt, lastFrame, modelImage } from './media.ts'
+import { voiceText } from './voices.ts'
 import { keywordHit, type CheckResult } from './policy.ts'
 import { estimate, IMAGE_UPSCALE_KEY, IMAGE_UPSCALE_SIZES, IMAGE_UPSCALE_USD, imageUpscaleCredits, normalize, rule, upscaleOptions, videoCaps, type GenerationParams, type ImageUpscaleSize, type Resolution } from './pricing.ts'
 import * as provider from './provider.ts'
@@ -67,8 +68,8 @@ async function loadCharacters(userId: number, ids: unknown): Promise<{ ids: numb
   if (!Array.isArray(ids) || ids.length > 3 || ids.some((id) => !Number.isSafeInteger(id)) || new Set(ids).size !== ids.length) {
     throw new JobError('Choose up to 3 different characters')
   }
-  const rows = await db.all<{ id: number; name: string; look: string; voice: string; asset_ids: number[] }>(
-    'SELECT id, name, look, voice, asset_ids FROM characters WHERE id = ANY(?) AND user_id = ? AND deleted_at IS NULL', ids, userId)
+  const rows = await db.all<{ id: number; name: string; look: string; voice: string; voice_id: string | null; asset_ids: number[] }>(
+    'SELECT id, name, look, voice, voice_id, asset_ids FROM characters WHERE id = ANY(?) AND user_id = ? AND deleted_at IS NULL', ids, userId)
   if (rows.length !== ids.length) throw new JobError('A character was not found')
   const list: LoadedCharacter[] = []
   for (const id of ids as number[]) {
@@ -80,7 +81,7 @@ async function loadCharacters(userId: number, ids: unknown): Promise<{ ids: numb
       const asset = assets.find((a) => a.id === assetId)
       return asset ? [imageForModel(asset)] : []
     }))
-    list.push({ name: row.name, look: row.look, voice: row.voice, frames })
+    list.push({ name: row.name, look: row.look, voice: voiceText(row.voice_id, row.voice), frames })
   }
   return { ids: ids as number[], list }
 }

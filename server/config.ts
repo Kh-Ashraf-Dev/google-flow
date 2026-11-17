@@ -18,6 +18,8 @@ export const config = {
   mock: !vertexKey.trim() || process.env.MOCK_PROVIDER === '1',
   models: {
     helper: process.env.HELPER_MODEL ?? 'gemini-3.8-flash',
+    // Voice samples for character voices (Gemini TTS on Vertex).
+    tts: process.env.TTS_MODEL ?? 'gemini-3.8-flash-tts',
     helperFallback: process.env.HELPER_FALLBACK_MODEL ?? 'gemini-3.5-flash',
     // Image upscale redraws with Nano Banana 2 (Imagen is no longer on Vertex for this project).
     imageUpscale: process.env.IMAGE_UPSCALE_MODEL ?? 'gemini-3.1-flash-image',

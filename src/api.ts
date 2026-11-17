@@ -82,7 +82,9 @@ export type Collection = { id: number; name: string }
 
 export type Project = { id: number; name: string; createdAt: number; updatedAt: number; items: number; cover: { url: string; mime: string } | null }
 
-export type Character = { id: number; name: string; look: string; voice: string; images: { assetId: number; url: string }[] }
+export type Character = { id: number; name: string; look: string; voice: string; voiceId: string | null; images: { assetId: number; url: string }[] }
+// A preset voice for characters; its sample plays from /api/voices/:id/sample.
+export type VoiceOption = { id: string; label: string; labelAr: string; gender: 'male' | 'female' }
 
 // What a job's prompt was made with (GET /jobs/:id/inputs).
 export type PickedImage = { jobId: number; assetId: number; url: string }

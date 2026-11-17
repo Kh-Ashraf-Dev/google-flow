@@ -15,6 +15,7 @@ import { hashBcryptPassword, isBcryptHash, isValidNewPassword } from './password
 import { checkPrompt } from './policy.ts'
 import { estimate, IMAGE_UPSCALE_SIZES, imageUpscaleCredits, loadPricing, normalize, pricingRules, upscaleOptions, type GenerationParams, type Resolution } from './pricing.ts'
 import { mp4Seconds } from './provider.ts'
+import { VOICES, voicePreset, voiceSample, voiceText } from './voices.ts'
 
 const app = new Hono<AppEnv>()
 
@@ -557,15 +558,30 @@ api.patch('/projects/:id', async (c) => {
   return c.json(await oneProject(project.id))
 })
 
+// ---------- voices ----------
+// Preset voices for characters, with a short spoken sample of each (made once, then kept).
+api.get('/voices', (c) => c.json(VOICES.map(({ id, label, labelAr, gender }) => ({ id, label, labelAr, gender }))))
+
+api.get('/voices/:id/sample', async (c) => {
+  if (!voicePreset(c.req.param('id'))) return c.json({ error: 'Voice not found' }, 404)
+  try {
+    const wav = await voiceSample(c.req.param('id'))
+    return c.body(new Uint8Array(wav), 200, { 'content-type': 'audio/wav', 'cache-control': 'private, max-age=86400' })
+  } catch (err) {
+    console.error('[voices] sample failed', (err as Error).message)
+    return c.json({ error: 'Couldn’t make the voice sample. Try again.' }, 502)
+  }
+})
+
 // ---------- characters ----------
 // A person to reuse across projects: name, 1–3 reference images, how they look and how they sound.
-type CharacterRow = { id: number; name: string; look: string; voice: string; asset_ids: number[] }
+type CharacterRow = { id: number; name: string; look: string; voice: string; voice_id: string | null; asset_ids: number[] }
 
 async function characterViews(userId: number, rows: CharacterRow[]) {
   const ids = [...new Set(rows.flatMap((r) => r.asset_ids))]
   const assets = ids.length ? await db.all<{ id: number; file: string }>('SELECT id, file FROM assets WHERE id = ANY(?) AND user_id = ? AND deleted_at IS NULL', ids, userId) : []
   return rows.map((r) => ({
-    id: r.id, name: r.name, look: r.look, voice: r.voice,
+    id: r.id, name: r.name, look: r.look, voice: r.voice, voiceId: r.voice_id,
     images: r.asset_ids.flatMap((assetId) => {
       const asset = assets.find((a) => a.id === assetId)
       return asset ? [{ assetId, url: `/media/${asset.file}` }] : []
@@ -573,7 +589,7 @@ async function characterViews(userId: number, rows: CharacterRow[]) {
   }))
 }
 
-async function characterInput(userId: number, body: { name?: unknown; look?: unknown; voice?: unknown; assetIds?: unknown }) {
+async function characterInput(userId: number, body: { name?: unknown; look?: unknown; voice?: unknown; voiceId?: unknown; assetIds?: unknown }) {
   const text = (value: unknown, max: number, label: string) => {
     if (value !== undefined && typeof value !== 'string') throw new JobError(`Enter ${label} as text`)
     const out = ((value as string | undefined) ?? '').trim()
@@ -584,6 +600,8 @@ async function characterInput(userId: number, body: { name?: unknown; look?: unk
   if (!name) throw new JobError('Give the character a name')
   const look = text(body.look, 800, 'the look')
   const voice = text(body.voice, 400, 'the voice')
+  const voiceId = body.voiceId == null || body.voiceId === '' ? null : String(body.voiceId)
+  if (voiceId !== null && !voicePreset(voiceId)) throw new JobError('Choose a voice from the list')
   const assetIds = body.assetIds
   if (!Array.isArray(assetIds) || assetIds.length < 1 || assetIds.length > 3 || assetIds.some((id) => !Number.isSafeInteger(id)) || new Set(assetIds).size !== assetIds.length) {
     throw new JobError('Choose 1 to 3 images of the character')
@@ -592,19 +610,20 @@ async function characterInput(userId: number, body: { name?: unknown; look?: unk
     WHERE a.id = ANY(?) AND a.user_id = ? AND a.deleted_at IS NULL AND j.kind = 'image' AND j.status = 'succeeded'`, assetIds, userId)
   if (owned.length !== assetIds.length) throw new JobError('A chosen image was not found')
   // The description reaches the model with every prompt, so it passes the content policy once here.
-  const check = await checkPrompt(userId, [`Character: ${name}.`, look, voice && `Voice: ${voice}`].filter(Boolean).join(' '))
+  const spoken = voiceText(voiceId, voice)
+  const check = await checkPrompt(userId, [`Character: ${name}.`, look, spoken && `Voice: ${spoken}`].filter(Boolean).join(' '))
   if (!check.allowed) {
     await recordBlocked(userId, `Character: ${name}`, check)
     throw new JobError(`This character can’t be saved: ${check.reasonEn || check.reasonAr}`)
   }
-  return { name, look, voice, assetIds: assetIds as number[] }
+  return { name, look, voice, voiceId, assetIds: assetIds as number[] }
 }
 
-const characterRow = async (id: number) => (await db.get<CharacterRow>('SELECT id, name, look, voice, asset_ids FROM characters WHERE id = ?', id))!
+const characterRow = async (id: number) => (await db.get<CharacterRow>('SELECT id, name, look, voice, voice_id, asset_ids FROM characters WHERE id = ?', id))!
 
 api.get('/characters', async (c) => {
   const userId = c.get('user').id
-  const rows = await db.all<CharacterRow>('SELECT id, name, look, voice, asset_ids FROM characters WHERE user_id = ? AND deleted_at IS NULL ORDER BY id', userId)
+  const rows = await db.all<CharacterRow>('SELECT id, name, look, voice, voice_id, asset_ids FROM characters WHERE user_id = ? AND deleted_at IS NULL ORDER BY id', userId)
   return c.json(await characterViews(userId, rows))
 })
 
@@ -612,8 +631,8 @@ api.post('/characters', async (c) => {
   const userId = c.get('user').id
   const input = await characterInput(userId, await c.req.json())
   const now = Date.now()
-  const id = await db.insert('INSERT INTO characters (user_id, name, look, voice, asset_ids, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    userId, input.name, input.look, input.voice, input.assetIds, now, now)
+  const id = await db.insert('INSERT INTO characters (user_id, name, look, voice, voice_id, asset_ids, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    userId, input.name, input.look, input.voice, input.voiceId, input.assetIds, now, now)
   await audit(userId, 'character.created', { characterId: id })
   return c.json((await characterViews(userId, [await characterRow(id)]))[0], 201)
 })
@@ -623,8 +642,8 @@ api.patch('/characters/:id', async (c) => {
   const id = collectionId(c.req.param('id'))
   if (!await db.get('SELECT id FROM characters WHERE id = ? AND user_id = ? AND deleted_at IS NULL', id, userId)) return c.json({ error: 'Character not found' }, 404)
   const input = await characterInput(userId, await c.req.json())
-  await db.run('UPDATE characters SET name = ?, look = ?, voice = ?, asset_ids = ?, updated_at = ? WHERE id = ?',
-    input.name, input.look, input.voice, input.assetIds, Date.now(), id)
+  await db.run('UPDATE characters SET name = ?, look = ?, voice = ?, voice_id = ?, asset_ids = ?, updated_at = ? WHERE id = ?',
+    input.name, input.look, input.voice, input.voiceId, input.assetIds, Date.now(), id)
   return c.json((await characterViews(userId, [await characterRow(id)]))[0])
 })
 

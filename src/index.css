@@ -854,3 +854,14 @@ h3 { font-size: 16px; font-weight: 500; margin: 0; }
 .setting-tag.warn { background: #3a2a0e; color: #ffd580; }
 .setting-check { width: 14px; color: #8ab4f8; font-weight: 700; }
 .flow-credit-line .keep-prompt { margin-inline-end: 4px; }
+
+/* Character voices: preset voices with a sample to play. */
+.voice-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.voice-option { display: flex; align-items: stretch; min-width: 0; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--bg-raised); overflow: hidden; }
+.voice-option.on { border-color: #8ab4f8; background: #1d2a3d; }
+button.voice-option { padding: 8px 10px; color: inherit; font: inherit; text-align: start; cursor: pointer; }
+.voice-pick { flex: 1; min-width: 0; padding: 8px 10px; border: 0; background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer; }
+.voice-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 12px; }
+.voice-name b { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.voice-play { flex: none; width: 38px; border: 0; border-left: 1px solid var(--border-subtle); background: transparent; color: var(--text); cursor: pointer; display: grid; place-items: center; font-size: 12px; }
+.voice-play:hover { background: var(--bg-hover); }
