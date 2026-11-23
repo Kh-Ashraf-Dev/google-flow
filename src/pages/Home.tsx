@@ -15,14 +15,15 @@ export function Home({ navigate }: { navigate: Navigate }) {
     api<Project[]>('/projects').then(setProjects).catch((err: Error) => { setProjects([]); setError(err.message) })
   }, [])
 
-  async function create(event: FormEvent) {
-    event.preventDefault()
-    if (!name.trim() || creating) return
+  // One click makes the project; it opens with its name selected, ready to type over.
+  async function create(event?: FormEvent) {
+    event?.preventDefault()
+    if (creating) return
     setCreating(true)
     setError('')
     try {
-      const project = await api<Project>('/projects', { name: name.trim() })
-      navigate(`/project/${project.id}`)
+      const project = await api<Project>('/projects', { name: name.trim() || 'Untitled project' })
+      navigate(`/project/${project.id}?new=1`)
     } catch (err) {
       setError((err as Error).message)
       setCreating(false)
@@ -44,18 +45,25 @@ export function Home({ navigate }: { navigate: Navigate }) {
   return (
     <main className="home">
       <div className="home-head">
-        <h1>Projects</h1>
+        <div className="col home-title">
+          <h1>Projects</h1>
+          <span className="muted">Each project keeps its own images, videos, scenes and collections · كل مشروع ليه صوره وفيديوهاته</span>
+        </div>
         <form className="home-create" onSubmit={create}>
-          <input className="input" aria-label="New project name" placeholder="New project name · اسم المشروع" maxLength={80} dir="auto"
+          <input className="input" aria-label="New project name" placeholder="Name (optional) · اسم المشروع" maxLength={80} dir="auto"
             value={name} onChange={(event) => setName(event.target.value)} />
-          <button className="btn" disabled={!name.trim() || creating}>{creating ? 'Creating…' : '＋ New project'}</button>
+          <button className="btn" disabled={creating}>{creating ? 'Creating…' : '＋ New project'}</button>
         </form>
       </div>
       {error && <div className="error-text" role="alert">{error}</div>}
       {projects === null ? <div className="empty">Loading…</div>
-        : projects.length === 0 ? <div className="empty">No projects yet. Name your first project above to start.</div>
         : (
           <div className="project-grid">
+            <button className="project-card project-new" disabled={creating} onClick={() => create()}>
+              <span className="project-new-plus" aria-hidden="true">＋</span>
+              <b>New project</b>
+              <span className="faint small">مشروع جديد</span>
+            </button>
             {projects.map((project) => (
               <div className="project-card" key={project.id}>
                 <button className="project-open" onClick={() => navigate(`/project/${project.id}`)} aria-label={`Open ${project.name}`}>

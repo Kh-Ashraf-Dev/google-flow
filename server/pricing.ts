@@ -29,6 +29,9 @@ const VIDEO_CAPS: Record<string, VideoCaps> = {
     resolutions: ['360p', '720p', '1080p', '4k'],
     seconds: { min: 3, max: 10, step: 1, maxFromSource: 10 },
     autoAspect: true, fullLengthOnly: [], referenceDuration: 'any',
+    // Not in Google's docs, but tested on Vertex (2026-11-18): the video starts on the first
+    // image and ends on the second, like 1.2.
+    endFrameDuration: { max: 10 },
   },
   'veo-3.1': { resolutions: ['720p', '1080p', '4k'], seconds: VEO_SECONDS, autoAspect: false, fullLengthOnly: ['1080p', '4k'], referenceDuration: 8, endFrameDuration: 8 },
   'veo-3.1-fast': { resolutions: ['720p', '1080p'], seconds: VEO_SECONDS, autoAspect: false, fullLengthOnly: ['1080p'], endFrameDuration: 8 },
@@ -144,10 +147,14 @@ export function estimate(p: Required<GenerationParams>): { credits: number; goog
   return { credits: Math.ceil(rate.credits * p.durationSeconds) * p.count, googleUsd: rate.usd * p.durationSeconds * p.count }
 }
 
-// Image upscale: Nano Banana 2 redraws the image at 2K or 4K, like Flow's image upscale.
-// Google bills its output image tokens ($60 per million): about 1,680 tokens at 2K and 2,520 at 4K.
+// Image upscale: a Gemini image model redraws the image at 2K or 4K, like Flow's image upscale.
+// Two models: Nano Banana 2 (fast) and Nano Banana Pro (finer detail, costs more). Google bills
+// their output image tokens: Nano Banana 2 at $60 per million (about 1,680 tokens at 2K and
+// 2,520 at 4K); Pro at $120 per million (1,120 tokens at 2K, 2,000 at 4K).
 export const IMAGE_UPSCALE_KEY = 'image-upscale'
-export const IMAGE_UPSCALE_SIZES = ['2K', '4K'] as const
+export const IMAGE_UPSCALE_SIZES = ['2K', '4K', '2K-pro', '4K-pro'] as const
 export type ImageUpscaleSize = (typeof IMAGE_UPSCALE_SIZES)[number]
-export const IMAGE_UPSCALE_USD: Record<ImageUpscaleSize, number> = { '2K': 0.101, '4K': 0.151 }
+export const IMAGE_UPSCALE_USD: Record<ImageUpscaleSize, number> = { '2K': 0.101, '4K': 0.151, '2K-pro': 0.134, '4K-pro': 0.24 }
 export const imageUpscaleCredits = (size: ImageUpscaleSize) => Math.ceil(IMAGE_UPSCALE_USD[size] / 0.08)
+// The size Google makes, and whether it's the Pro model.
+export const imageUpscaleTarget = (size: ImageUpscaleSize) => ({ size: size.startsWith('4K') ? '4K' as const : '2K' as const, pro: size.endsWith('-pro') })

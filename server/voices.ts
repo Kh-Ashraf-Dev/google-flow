@@ -11,6 +11,10 @@ export type VoicePreset = {
   label: string
   labelAr: string
   gender: 'male' | 'female'
+  // 'flow': the 30 Google voices Flow offers, by their Google names (e.g. Enceladus).
+  group: 'preset' | 'flow'
+  // Google's one-word description of a Flow voice.
+  style?: string
   // Sent to the video model as the character's voice.
   prompt: string
   // Gemini TTS prebuilt voice and delivery for the sample. Google lists no genders for these
@@ -19,7 +23,7 @@ export type VoicePreset = {
   ttsStyle: string
 }
 
-export const VOICES: VoicePreset[] = [
+const PRESETS: Omit<VoicePreset, 'group'>[] = [
   { id: 'narrator-man', label: 'Calm narrator', labelAr: 'راوي هادي', gender: 'male', ttsVoice: 'Charon',
     ttsStyle: 'calm, clear and steady, like a documentary narrator', prompt: 'a calm, clear adult male narrator voice with a steady pace' },
   { id: 'deep-elder', label: 'Deep elder', labelAr: 'شيخ صوته عميق', gender: 'male', ttsVoice: 'Algenib',
@@ -32,6 +36,15 @@ export const VOICES: VoicePreset[] = [
     ttsStyle: 'firm, confident and clear, addressing a crowd', prompt: 'a firm, confident, clear adult male voice that projects well' },
   { id: 'excited-man', label: 'Excited host', labelAr: 'مذيع متحمس', gender: 'male', ttsVoice: 'Fenrir',
     ttsStyle: 'excited and energetic, like a TV host', prompt: 'an energetic, excited male TV-host voice' },
+  // Calm men's voices, asked for by the client.
+  { id: 'calm-man', label: 'Calm man', labelAr: 'راجل هادي', gender: 'male', ttsVoice: 'Schedar',
+    ttsStyle: 'calm, even and unhurried, speaking softly', prompt: 'a calm, even, unhurried adult male voice, speaking softly' },
+  { id: 'gentle-man', label: 'Gentle man', labelAr: 'صوت رجالي حنين', gender: 'male', ttsVoice: 'Algieba',
+    ttsStyle: 'gentle, smooth and reassuring', prompt: 'a gentle, smooth, reassuring adult male voice at a slow pace' },
+  { id: 'quiet-man', label: 'Quiet storyteller', labelAr: 'حكّاء هادي', gender: 'male', ttsVoice: 'Enceladus',
+    ttsStyle: 'quiet, breathy and intimate, like telling a story at night', prompt: 'a quiet, breathy, intimate adult male storytelling voice, low and slow' },
+  { id: 'calm-elder', label: 'Calm elder', labelAr: 'شيخ هادي', gender: 'male', ttsVoice: 'Iapetus',
+    ttsStyle: 'calm, clear and wise, an older man speaking slowly', prompt: 'a calm, clear, wise older male voice speaking slowly' },
   { id: 'narrator-woman', label: 'Clear narrator', labelAr: 'راوية واضحة', gender: 'female', ttsVoice: 'Kore',
     ttsStyle: 'clear, firm and steady, like a narrator', prompt: 'a clear, steady adult female narrator voice' },
   { id: 'warm-woman', label: 'Warm woman', labelAr: 'ست صوتها دافي', gender: 'female', ttsVoice: 'Sulafat',
@@ -44,6 +57,49 @@ export const VOICES: VoicePreset[] = [
     ttsStyle: 'mature, calm and wise', prompt: 'a mature, calm older female voice' },
   { id: 'soft-woman', label: 'Soft voice', labelAr: 'صوت ناعم', gender: 'female', ttsVoice: 'Achernar',
     ttsStyle: 'soft and gentle, close to the microphone', prompt: 'a soft, gentle female voice, close to the microphone' },
+]
+
+// Flow's voices: Google's 30 prebuilt voices, under their Google names. The sample is that exact
+// voice (Gemini TTS); the video model gets the description, as it takes no voice input.
+const FLOW_VOICES: [name: string, gender: 'male' | 'female', style: string, styleAr: string, prompt: string][] = [
+  ['Zephyr', 'female', 'Bright', 'مشرق', 'a bright, clear, cheerful adult female voice'],
+  ['Puck', 'male', 'Upbeat', 'حيوي', 'an upbeat, lively adult male voice'],
+  ['Charon', 'male', 'Informative', 'إخباري', 'a calm, informative, measured adult male voice, like a documentary narrator'],
+  ['Kore', 'female', 'Firm', 'حازم', 'a firm, confident, clear adult female voice'],
+  ['Fenrir', 'male', 'Excitable', 'متحمس', 'an excitable, energetic adult male voice'],
+  ['Leda', 'female', 'Youthful', 'شبابي', 'a youthful, light young female voice'],
+  ['Orus', 'male', 'Firm', 'حازم', 'a firm, steady, authoritative adult male voice'],
+  ['Aoede', 'female', 'Breezy', 'خفيف', 'a breezy, relaxed, airy adult female voice'],
+  ['Callirrhoe', 'female', 'Easy-going', 'رايق', 'an easy-going, relaxed adult female voice'],
+  ['Autonoe', 'female', 'Bright', 'مشرق', 'a bright, warm, articulate adult female voice'],
+  ['Enceladus', 'male', 'Breathy', 'نَفَسي هادي', 'a breathy, soft, calm adult male voice, low and close to the microphone, unhurried'],
+  ['Iapetus', 'male', 'Clear', 'واضح', 'a clear, calm, well-articulated adult male voice'],
+  ['Umbriel', 'male', 'Easy-going', 'رايق', 'an easy-going, relaxed, friendly adult male voice'],
+  ['Algieba', 'male', 'Smooth', 'ناعم', 'a smooth, warm, gentle adult male voice'],
+  ['Despina', 'female', 'Smooth', 'ناعم', 'a smooth, warm adult female voice'],
+  ['Erinome', 'female', 'Clear', 'واضح', 'a clear, precise adult female voice'],
+  ['Algenib', 'male', 'Gravelly', 'مبحوح', 'a gravelly, deep, textured adult male voice'],
+  ['Rasalgethi', 'male', 'Informative', 'إخباري', 'an informative, confident adult male presenter voice'],
+  ['Laomedeia', 'female', 'Upbeat', 'حيوي', 'an upbeat, lively adult female voice'],
+  ['Achernar', 'female', 'Soft', 'واطي وناعم', 'a soft, gentle, quiet adult female voice'],
+  ['Alnilam', 'male', 'Firm', 'حازم', 'a firm, strong, steady adult male voice'],
+  ['Schedar', 'male', 'Even', 'متزن', 'an even, calm, balanced adult male voice'],
+  ['Gacrux', 'female', 'Mature', 'ناضج', 'a mature, calm, older female voice'],
+  ['Pulcherrima', 'female', 'Forward', 'جريء', 'a forward, confident, projecting adult female voice'],
+  ['Achird', 'male', 'Friendly', 'ودود', 'a friendly, warm, approachable adult male voice'],
+  ['Zubenelgenubi', 'male', 'Casual', 'عفوي', 'a casual, conversational adult male voice'],
+  ['Vindemiatrix', 'female', 'Gentle', 'لطيف', 'a gentle, kind, soft-spoken adult female voice'],
+  ['Sadachbia', 'male', 'Lively', 'مرح', 'a lively, animated adult male voice'],
+  ['Sadaltager', 'male', 'Knowledgeable', 'رزين', 'a knowledgeable, composed, thoughtful adult male voice'],
+  ['Sulafat', 'female', 'Warm', 'دافي', 'a warm, caring adult female voice'],
+]
+
+export const VOICES: VoicePreset[] = [
+  ...PRESETS.map((voice) => ({ ...voice, group: 'preset' as const })),
+  ...FLOW_VOICES.map(([name, gender, style, styleAr, prompt]) => ({
+    id: `flow-${name.toLowerCase()}`, label: name, labelAr: styleAr, gender, group: 'flow' as const, style,
+    ttsVoice: name, ttsStyle: 'natural and conversational', prompt,
+  })),
 ]
 
 export const voicePreset = (id: string | null | undefined) => VOICES.find((voice) => voice.id === id)

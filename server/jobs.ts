@@ -3,10 +3,10 @@ import { join } from 'node:path'
 import { config } from './config.ts'
 import { audit, db, tx } from './db.ts'
 import * as ledger from './ledger.ts'
-import { frameAt, lastFrame, modelImage } from './media.ts'
+import { appendClip, frameAt, lastFrame, modelImage, trimClip } from './media.ts'
 import { voiceText } from './voices.ts'
 import { keywordHit, type CheckResult } from './policy.ts'
-import { estimate, IMAGE_UPSCALE_KEY, IMAGE_UPSCALE_SIZES, IMAGE_UPSCALE_USD, imageUpscaleCredits, normalize, rule, upscaleOptions, videoCaps, type GenerationParams, type ImageUpscaleSize, type Resolution } from './pricing.ts'
+import { estimate, IMAGE_UPSCALE_KEY, IMAGE_UPSCALE_SIZES, IMAGE_UPSCALE_USD, imageUpscaleCredits, imageUpscaleTarget, normalize, rule, upscaleOptions, videoCaps, type GenerationParams, type ImageUpscaleSize, type Resolution } from './pricing.ts'
 import * as provider from './provider.ts'
 import { upscaleGeminiImage, upscaleOmni } from './vertex.ts'
 
@@ -89,11 +89,17 @@ async function loadCharacters(userId: number, ids: unknown): Promise<{ ids: numb
 // The characters' looks (and voices, for video) added to the prompt the model gets.
 function withCharacters(prompt: string, characters: LoadedCharacter[], video: boolean) {
   if (!characters.length) return prompt
-  const lines = characters.map((c) => {
-    const parts = [c.look.trim(), video && c.voice.trim() ? `Voice: ${c.voice.trim()}` : ''].filter(Boolean)
-    return `- ${c.name}${parts.length ? `: ${parts.join('. ')}` : ''}`
-  })
-  return `${prompt}\n\nCharacters (keep each one looking exactly like their reference images${video ? ' and speaking in the voice described' : ''}):\n${lines.join('\n')}`
+  const lines = characters.map((c) => `- ${c.name}${c.look.trim() ? `: ${c.look.trim()}` : ''}`)
+  let text = `${prompt}\n\nCharacters (keep each one looking exactly like their reference images):\n${lines.join('\n')}`
+  // The voice gets its own audio direction: a line buried in the look was easy for the model to skip.
+  const voiced = video ? characters.filter((c) => c.voice.trim()) : []
+  if (voiced.length === 1 && characters.length === 1) {
+    const c = voiced[0]
+    text += `\n\nAudio: every spoken line is said by ${c.name} in ${c.voice.trim().replace(/\.$/, '')}. Keep exactly this voice for the whole clip.`
+  } else if (voiced.length) {
+    text += `\n\nAudio (each character always speaks in their own voice, the same for the whole clip):\n${voiced.map((c) => `- ${c.name} speaks in ${c.voice.trim().replace(/\.$/, '')}`).join('\n')}`
+  }
+  return text
 }
 
 const modelId = (key: string) => {
@@ -138,7 +144,8 @@ export type CreateJobInput = {
 // How many videos one press of Generate can start.
 export const MAX_VIDEOS_PER_GENERATE = 4
 
-type Source = { jobId: number; mode: 'extend' | 'animate' | 'edit'; frame: provider.StartFrame; name?: string }
+// `file`: an extended clip's MP4, so the new piece can be joined onto it.
+type Source = { jobId: number; mode: 'extend' | 'animate' | 'edit'; frame: provider.StartFrame; name?: string; file?: string }
 
 // The clip to edit, sent whole to the model, plus its real length.
 async function loadEditVideo(userId: number, jobId: number): Promise<{ source: Source; seconds: number }> {
@@ -171,7 +178,7 @@ async function loadSource(userId: number, jobId: number, assetId?: number, kind?
       return { jobId, mode: 'extend', frame: { mime: asset.mime, bytes: Buffer.alloc(0) } }
     }
     try {
-      return { jobId, mode: 'extend', frame: { mime: 'image/jpeg', bytes: await lastFrame(asset.file) } }
+      return { jobId, mode: 'extend', frame: { mime: 'image/jpeg', bytes: await lastFrame(asset.file) }, file: asset.file }
     } catch (err) {
       throw new JobError(`Couldn’t read the last frame of that clip (${(err as Error).message})`)
     }
@@ -250,14 +257,14 @@ export async function createJobs(userId: number, input: CreateJobInput) {
   if (images !== undefined) {
     if (!images || !['separate', 'references', 'frames'].includes(images.mode) || !Array.isArray(images.items) ||
       images.items.length < (images.mode === 'frames' || (images.mode === 'references' && !characterFrames.length) ? 2 : 1) ||
-      images.items.length > (images.mode === 'frames' ? 2 : images.mode === 'references' ? 3 : 4) ||
+      images.items.length > (images.mode === 'frames' ? 2 : images.mode === 'references' ? 3 : 1) ||
       images.items.some((item) => !item || !Number.isSafeInteger(item.jobId) || !Number.isSafeInteger(item.assetId)) ||
       new Set(images.items.map((item) => item.assetId)).size !== images.items.length ||
       input.sourceJobId != null || input.sourceAssetId != null) {
       throw new JobError('Choose distinct images for one video mode')
     }
     if (images.mode === 'frames' && !videoCaps(input.params.modelKey)?.endFrameDuration) {
-      throw new JobError('A start and end frame needs Gemini Omni 1.2 Flash, Veo 3.1 Quality or Veo 3.1 Fast')
+      throw new JobError('A start and end frame needs a Gemini Omni model, Veo 3.1 Quality or Veo 3.1 Fast')
     }
     if (images.mode === 'references' && referenceDuration === undefined) {
       throw new JobError('Reference images require an Omni model or Veo 3.1 Quality')
@@ -358,20 +365,28 @@ export async function createJobs(userId: number, input: CreateJobInput) {
     for (const [index, id] of jobIds.entries()) {
       const source = sources[index]
       const video = source?.mode === 'edit' ? source.frame : undefined
-      void runVideo(id, model, modelPrompt(modelText, source, !!endFrame), params, video ? undefined : source?.frame, references, video, endFrame)
+      // Outside a scene, an extension is joined onto the clip it continues, so the result is one
+      // longer video (like Flow). In a scene the pieces stay apart, next to each other on the timeline.
+      const joinOnto = source?.mode === 'extend' && input.sceneId == null ? source.file : undefined
+      void runVideo(id, model, modelPrompt(modelText, source, !!endFrame), params, video ? undefined : source?.frame, references, video, endFrame, joinOnto)
     }
     return Promise.all(jobIds.map(async (id) => (await getJob(id))!))
   }
   const [jobId] = jobIds
-  try {
-    const guidance = edits.length > 1 ? 'Use the supplied reference images in the order shown to create a single image. Follow the prompt for how to combine them.'
-      : edits.length === 1 ? 'Edit the provided image. Preserve details outside the requested change.'
-      : characterFrames.length ? 'The supplied images show the characters named below. Create a new image that follows the prompt.' : ''
-    const images = await provider.generateImages(model, guidance ? `${guidance} ${modelText}` : modelText, params, imageSources)
-    await succeed(jobId, images.map((img) => ({ ...img, mock: config.mock })), Math.ceil((r.credits_per_image ?? 1) * images.length), r.google_usd_per_unit * images.length)
-  } catch (err) {
-    await fail(jobId, err instanceof Error ? err.message : String(err), !!(err as { safety?: boolean })?.safety)
-  }
+  const guidance = edits.length > 1 ? 'Use the supplied reference images in the order shown to create a single image. Follow the prompt for how to combine them.'
+    : edits.length === 1 ? 'Edit the provided image. Preserve details outside the requested change.'
+    : characterFrames.length ? 'The supplied images show the characters named below. Create a new image that follows the prompt.' : ''
+  // Images run in the background like videos, so the studio can start the next prompt at once;
+  // the page polls the job until it's done.
+  await db.run("UPDATE jobs SET status = 'running' WHERE id = ? AND status = 'reserved'", jobId)
+  void (async () => {
+    try {
+      const images = await provider.generateImages(model, guidance ? `${guidance} ${modelText}` : modelText, params, imageSources)
+      await succeed(jobId, images.map((img) => ({ ...img, mock: config.mock })), Math.ceil((r.credits_per_image ?? 1) * images.length), r.google_usd_per_unit * images.length)
+    } catch (err) {
+      await fail(jobId, err instanceof Error ? err.message : String(err), !!(err as { safety?: boolean })?.safety).catch((e) => console.error('[jobs] fail()', e))
+    }
+  })()
   return [(await getJob(jobId))!]
 }
 
@@ -448,6 +463,43 @@ export async function saveFrame(userId: number, videoJobId: number, seconds: num
   })
 }
 
+// Saves the part of a clip between `start` and `end` as a new video in the gallery (the original
+// stays), like trimming a clip in Flow. Free: it's cut locally, no model is called.
+export async function trimVideo(userId: number, videoJobId: number, start: number, end: number) {
+  if (!Number.isSafeInteger(videoJobId) || !Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start) {
+    throw new JobError('Choose where the clip starts and ends')
+  }
+  const job = await getJob(videoJobId)
+  if (!job || job.user_id !== userId || job.kind !== 'video' || job.status !== 'succeeded') throw new JobError('The video was not found')
+  const asset = await db.get<{ file: string; mime: string }>('SELECT file, mime FROM assets WHERE job_id = ? AND deleted_at IS NULL ORDER BY id LIMIT 1', videoJobId)
+  if (!asset) throw new JobError('That video has no media')
+  if (asset.mime !== 'video/mp4') throw new JobError('Mock clips are pictures, so there is nothing to trim. This works with real videos.')
+  const length = provider.mp4Seconds(readFileSync(join(config.dataDir, 'media', asset.file))) ?? end
+  const from = Math.min(start, Math.max(length - 0.5, 0))
+  const to = Math.min(end, length)
+  if (to - from < 0.5) throw new JobError('Keep at least half a second of the clip')
+  let bytes: Buffer
+  try {
+    bytes = await trimClip(asset.file, from, to)
+  } catch (err) {
+    throw new JobError(`Couldn’t trim the clip (${(err as Error).message})`)
+  }
+  const original = JSON.parse(job.params) as GenerationParams
+  const seconds = provider.mp4Seconds(bytes) ?? to - from
+  const params = { ...original, modelKey: 'upload', durationSeconds: Math.round(seconds * 10) / 10, count: 1 }
+  const label = `Trimmed ${from.toFixed(1)}–${to.toFixed(1)}s`
+  return tx(async () => {
+    const now = Date.now()
+    const id = await db.insert(`INSERT INTO jobs (user_id, kind, model_key, params, prompt_original, prompt_final, estimated_cost, actual_cost, google_cost_usd, status, policy, created_at, completed_at, source_job_id, project_id)
+      VALUES (?, 'video', 'upload', ?, ?, ?, 0, 0, 0, 'succeeded', ?, ?, ?, ?, ?)`, userId, JSON.stringify(params),
+      `${label} · ${job.prompt_original}`.slice(0, 500), job.prompt_final, job.policy, now, now, videoJobId, job.project_id)
+    const created = (await getJob(id))!
+    await saveAsset(created, 0, { mime: 'video/mp4', bytes })
+    await audit(userId, 'video.trimmed', { jobId: id, from: videoJobId, start: from, end: to })
+    return created
+  })
+}
+
 export async function upscaleVideo(userId: number, sourceId: number, resolution: Resolution) {
   if (!Number.isSafeInteger(sourceId)) throw new JobError('Choose a video to upscale')
   const source = await getJob(sourceId)
@@ -476,9 +528,10 @@ export async function upscaleVideo(userId: number, sourceId: number, resolution:
   return (await getJob(jobId))!
 }
 
-// Image upscale: a new copy of one image at 2K or 4K.
+// Image upscale: a new copy of one image at 2K or 4K, by the fast or the Pro model. It runs in
+// the background like a generation; the page polls the new job.
 export async function upscaleImage(userId: number, assetId: number, size: ImageUpscaleSize) {
-  if (!Number.isSafeInteger(assetId) || !IMAGE_UPSCALE_SIZES.includes(size)) throw new JobError('Choose an image and 2K or 4K')
+  if (!Number.isSafeInteger(assetId) || !IMAGE_UPSCALE_SIZES.includes(size)) throw new JobError('Choose an image and an upscale size')
   const asset = await db.get<{ job_id: number; file: string; mime: string }>(`SELECT a.job_id, a.file, a.mime FROM assets a JOIN jobs j ON j.id = a.job_id
     WHERE a.id = ? AND a.user_id = ? AND a.deleted_at IS NULL AND j.kind = 'image' AND j.status = 'succeeded'`, assetId, userId)
   if (!asset) throw new JobError('The image was not found')
@@ -491,21 +544,25 @@ export async function upscaleImage(userId: number, assetId: number, size: ImageU
   const jobId = await tx(async () => {
     await checkCredits(userId, credits, usd)
     const id = await db.insert(`INSERT INTO jobs (user_id, kind, model_key, params, prompt_original, prompt_final, estimated_cost, google_cost_usd, status, policy, created_at, source_job_id, project_id, inputs)
-      VALUES (?, 'image', ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, ?, ?)`,
+      VALUES (?, 'image', ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)`,
       userId, IMAGE_UPSCALE_KEY, JSON.stringify(params), source.prompt_original, source.prompt_final, credits, usd,
       source.policy, Date.now(), source.id, source.project_id, null)
     await ledger.reserve(userId, id, credits)
     await audit(userId, 'job.image_upscale', { jobId: id, assetId, size })
     return id
   })
-  try {
-    const file = config.mock
-      ? { mime: asset.mime, bytes: readFileSync(join(config.dataDir, 'media', asset.file)) }
-      : await upscaleGeminiImage(config.models.imageUpscale, await imageForModel(asset), size)
-    await succeed(jobId, [{ ...file, mock: config.mock }])
-  } catch (err) {
-    await fail(jobId, err instanceof Error ? err.message : String(err), !!(err as { safety?: boolean })?.safety)
-  }
+  const target = imageUpscaleTarget(size)
+  const model = target.pro ? config.models.generation['nano-banana-pro'] : config.models.imageUpscale
+  void (async () => {
+    try {
+      const file = config.mock
+        ? { mime: asset.mime, bytes: readFileSync(join(config.dataDir, 'media', asset.file)) }
+        : await upscaleGeminiImage(model, await imageForModel(asset), target.size)
+      await succeed(jobId, [{ ...file, mock: config.mock }])
+    } catch (err) {
+      await fail(jobId, err instanceof Error ? err.message : String(err), !!(err as { safety?: boolean })?.safety).catch((e) => console.error('[jobs] fail()', e))
+    }
+  })()
   return (await getJob(jobId))!
 }
 
@@ -539,19 +596,34 @@ async function succeed(jobId: number, files: { mime: string; bytes: Buffer; mock
   })
 }
 
-async function runVideo(jobId: number, model: string, prompt: string, params: Required<GenerationParams>, frame: provider.StartFrame | undefined, references: provider.StartFrame[], video?: provider.StartFrame, endFrame?: provider.StartFrame) {
+async function runVideo(jobId: number, model: string, prompt: string, params: Required<GenerationParams>, frame: provider.StartFrame | undefined, references: provider.StartFrame[], video?: provider.StartFrame, endFrame?: provider.StartFrame, joinOnto?: string) {
   try {
     const file = await provider.generateVideo(model, prompt, params, frame, references, video, endFrame)
     // Bill the length Google actually made, not the one asked for.
     const seconds = file.mime === 'video/mp4' ? provider.mp4Seconds(file.bytes) : null
     if (seconds) {
       const real = estimate({ ...params, durationSeconds: seconds })
-      await succeed(jobId, [file], real.credits, real.googleUsd)
+      const joined = joinOnto ? await joinExtension(jobId, joinOnto, file.bytes, params, seconds) : null
+      await succeed(jobId, [joined ?? file], real.credits, real.googleUsd)
     } else {
       await succeed(jobId, [{ ...file, mock: config.mock }])
     }
   } catch (err) {
     await fail(jobId, err instanceof Error ? err.message : String(err), !!(err as { safety?: boolean })?.safety).catch((e) => console.error('[jobs] fail()', e))
+  }
+}
+
+// The clip it extends followed by the new piece, as one MP4. The job's params remember how long
+// the new piece is (`extendedSeconds`), so the card can say "8s + 4s". If joining fails, the
+// new piece is kept on its own rather than failing a paid video.
+async function joinExtension(jobId: number, sourceFile: string, piece: Buffer, params: Required<GenerationParams>, seconds: number) {
+  try {
+    const bytes = await appendClip(sourceFile, piece, params.aspectRatio, params.resolution)
+    await db.run('UPDATE jobs SET params = ? WHERE id = ?', JSON.stringify({ ...params, extendedSeconds: Math.round(seconds * 10) / 10 }), jobId)
+    return { mime: 'video/mp4', bytes }
+  } catch (err) {
+    console.error('[jobs] joining the extension failed; keeping the new piece alone', (err as Error).message)
+    return null
   }
 }
 

@@ -24,8 +24,12 @@ export type Allowance = { limit: number | null; extra: number; spent: number; re
 
 export type Me = {
   user: User; balance: number; spentToday: number; allowance: Allowance; mock: boolean; pricing: PricingRule[]
-  imageUpscale: { size: '2K' | '4K'; credits: number }[]
+  imageUpscale: { size: ImageUpscaleSize; credits: number }[]
 }
+
+// Image upscale: 2K or 4K, by the fast model or the Pro one (finer detail).
+export type ImageUpscaleSize = '2K' | '4K' | '2K-pro' | '4K-pro'
+export const upscaleLabel = (size: string) => size.startsWith('x') ? size.replace('x', '×') : size.replace('-pro', ' Pro')
 
 export type Params = {
   modelKey: string
@@ -34,7 +38,9 @@ export type Params = {
   resolution?: '360p' | '720p' | '1080p' | '4k'
   count?: number
   // Set on image upscale jobs.
-  upscale?: '2K' | '4K' | 'x2' | 'x4'
+  upscale?: ImageUpscaleSize | 'x2' | 'x4'
+  // Set on an extended clip joined onto the clip it continues: how long the new piece is.
+  extendedSeconds?: number
 }
 
 export type Check = {
@@ -84,7 +90,8 @@ export type Project = { id: number; name: string; createdAt: number; updatedAt: 
 
 export type Character = { id: number; name: string; look: string; voice: string; voiceId: string | null; images: { assetId: number; url: string }[] }
 // A preset voice for characters; its sample plays from /api/voices/:id/sample.
-export type VoiceOption = { id: string; label: string; labelAr: string; gender: 'male' | 'female' }
+// group 'flow': Flow's 30 Google voices by their Google names (e.g. Enceladus), with Google's description as style.
+export type VoiceOption = { id: string; label: string; labelAr: string; gender: 'male' | 'female'; group: 'preset' | 'flow'; style?: string }
 
 // What a job's prompt was made with (GET /jobs/:id/inputs).
 export type PickedImage = { jobId: number; assetId: number; url: string }
@@ -104,7 +111,9 @@ export type Scene = { id: number; name: string; createdAt: number; updatedAt: nu
 export type Source = { job: Job; assetId?: number; mode: 'extend' | 'animate' | 'edit' }
 
 export const clipSeconds = (j: Job) => j.seconds ?? j.params.durationSeconds ?? 4
-export const isPlayable = (j: Job) => j.status === 'succeeded' && !!j.assets[0]
+// A JPEG still of a video's first moment, made once on the server and kept by the browser.
+export const posterUrl = (videoUrl: string) => videoUrl.replace(/^(\/media\/[^?#]+)/, '$1/poster')
+export const isPlayable =(j: Job) => j.status === 'succeeded' && !!j.assets[0]
 
 export function clock(s: number) {
   const t = Math.max(0, Math.floor(s))

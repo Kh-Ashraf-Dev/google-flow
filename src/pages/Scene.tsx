@@ -7,12 +7,13 @@ type Props = {
   jobs: Job[]
   onChange: (scene: Scene) => void
   onClose: () => void
+  onAllMedia: () => void
   onDeleted: () => void
   onExtend: (job: Job) => void
   extendingFrom: number | null
 }
 
-export function SceneBuilder({ scene, jobs, onChange, onClose, onDeleted, onExtend, extendingFrom }: Props) {
+export function SceneBuilder({ scene, jobs, onChange, onClose, onAllMedia, onDeleted, onExtend, extendingFrom }: Props) {
   // Jobs are polled on the studio page, so take the freshest copy of each clip from there.
   const clips: SceneClip[] = useMemo(
     () => scene.clips.map((c) => ({ ...c, job: jobs.find((j) => j.id === c.job.id) ?? c.job })),
@@ -241,7 +242,8 @@ export function SceneBuilder({ scene, jobs, onChange, onClose, onDeleted, onExte
   return (
     <div className="scene">
       <div className="scene-head">
-        <button className="btn ghost sm" onClick={onClose}>← All clips</button>
+        <button className="btn sm secondary" onClick={onAllMedia} title="Back to all your images and videos"><span aria-hidden="true">←</span> All media</button>
+        <button className="btn ghost sm" onClick={onClose}>▤ Scenes</button>
         <input className="scene-name" value={name} onChange={(e) => setName(e.target.value)} onBlur={rename} onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()} />
         <span className="faint small num">{clips.length} clip{clips.length === 1 ? '' : 's'} · {clock(total)}</span>
         <div className="spacer" />

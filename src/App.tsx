@@ -8,7 +8,8 @@ import { Usage } from './pages/Usage.tsx'
 
 // What a project page shows. Each one has its own URL, so Back/Forward and refresh work.
 export type StudioFilter = 'all' | 'image' | 'video' | 'uploads' | 'favorites' | 'scenes' | 'bin' | 'characters'
-export type StudioView = { filter: StudioFilter; collectionId: number | null; sceneId: number | null }
+// clipId: a video opened on its own page (play, extend, edit, trim, upscale).
+export type StudioView = { filter: StudioFilter; collectionId: number | null; sceneId: number | null; clipId?: number | null }
 
 type Route =
   | { page: 'home' | 'usage' | 'admin' }
@@ -20,6 +21,7 @@ const FILTER_PATHS: Record<string, StudioFilter> = {
 
 export function studioPath(projectId: number, view: Partial<StudioView>) {
   const base = `/project/${projectId}`
+  if (view.clipId != null) return `${base}/clip/${view.clipId}`
   if (view.sceneId != null) return `${base}/scene/${view.sceneId}`
   if (view.collectionId != null) return `${base}/collection/${view.collectionId}`
   const part = Object.entries(FILTER_PATHS).find(([, filter]) => filter === (view.filter ?? 'all'))?.[0] ?? ''
@@ -29,11 +31,12 @@ export function studioPath(projectId: number, view: Partial<StudioView>) {
 function currentRoute(): Route {
   const p = window.location.pathname.replace(/\/+$/, '')
   if (p === '/usage' || p === '/admin') return { page: p.slice(1) as 'usage' | 'admin' }
-  const m = /^\/project\/(\d+)(?:\/(scene|collection)\/(\d+)|\/([a-z]+))?$/.exec(p)
+  const m = /^\/project\/(\d+)(?:\/(scene|collection|clip)\/(\d+)|\/([a-z]+))?$/.exec(p)
   if (m) {
     const view: StudioView = { filter: 'all', collectionId: null, sceneId: null }
     if (m[2] === 'scene') { view.filter = 'scenes'; view.sceneId = Number(m[3]) }
     else if (m[2] === 'collection') view.collectionId = Number(m[3])
+    else if (m[2] === 'clip') view.clipId = Number(m[3])
     else if (m[4]) view.filter = FILTER_PATHS[m[4]] ?? 'all'
     return { page: 'project', projectId: Number(m[1]), view }
   }

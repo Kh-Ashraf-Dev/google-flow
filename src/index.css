@@ -865,3 +865,234 @@ button.voice-option { padding: 8px 10px; color: inherit; font: inherit; text-ali
 .voice-name b { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .voice-play { flex: none; width: 38px; border: 0; border-left: 1px solid var(--border-subtle); background: transparent; color: var(--text); cursor: pointer; display: grid; place-items: center; font-size: 12px; }
 .voice-play:hover { background: var(--bg-hover); }
+
+/* What the prompt uses (characters, images and their roles, a clip): one compact row of
+   thumbnails above the prompt, so the gallery behind stays visible. */
+.studio .panel-body { max-height: min(40dvh, 300px); padding: 8px 10px; }
+.attach { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.attach-tray { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; }
+.attach-card { flex: none; width: 92px; display: flex; flex-direction: column; gap: 4px; }
+.attach-thumb { position: relative; width: 92px; height: 52px; border-radius: 9px; overflow: hidden; background: #000; border: 1px solid #333; }
+.attach-thumb img, .attach-thumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.attach-thumb .character-blank { width: 100%; height: 100%; border-radius: 0; }
+.attach-card.character .attach-thumb { border-color: #4b5a73; }
+.attach-card.role-end .attach-thumb { border-color: #8ab4f8; }
+.attach-card.role-ingredient .attach-thumb { border-color: #6f8f5f; }
+.attach-index {
+  position: absolute; left: 4px; top: 4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px;
+  background: #000c; color: #fff; font-size: 10px; line-height: 16px; text-align: center;
+}
+.attach-remove {
+  position: absolute; right: 3px; top: 3px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 999px;
+  background: #000c; color: #fff; font-size: 11px; line-height: 20px; cursor: pointer;
+}
+.attach-remove:hover { background: #402322; }
+.attach-label { font-size: 11.5px; color: #c4c7c5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-inline: 2px; }
+.attach-role {
+  width: 100%; height: 22px; padding: 0 4px; border: 1px solid #343434; border-radius: 7px;
+  background: #1e1f20; color: #e3e3e3; font: inherit; font-size: 11.5px; cursor: pointer;
+}
+.attach-hint { line-height: 1.35; }
+
+/* Batch view, smaller: media at a comfortable size with its details beside it, and the less
+   used actions behind "⋯" so a row is a few buttons, not a wall of them. */
+.flow-batch > .tile, .batch-row { grid-template-columns: minmax(0, 460px) minmax(220px, 320px); gap: 20px; padding: 16px 0; }
+.batch-row { grid-template-columns: minmax(0, 720px) minmax(220px, 320px); }
+.batch-takes { grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); gap: 12px 10px; }
+.flow-batch .foot .prompt, .batch-details .prompt { -webkit-line-clamp: 3; font-size: 13px; line-height: 1.5; }
+.flow-batch > .tile > .foot, .batch-details { gap: 8px; }
+.flow-batch .tile-actions, .flow-batch .image-actions { gap: 5px; }
+.flow-batch .image-actions { display: flex; flex-wrap: wrap; align-items: center; padding-top: 6px; }
+.favorite-btn.icon-only { min-width: 30px; padding-inline: 8px; font-size: 14px; }
+.favorite-btn.on { color: #fdd663; }
+@media (max-width: 720px) {
+  .flow-batch > .tile, .batch-row { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+}
+
+.more-menu { position: relative; display: inline-block; }
+.more-menu > summary { list-style: none; cursor: pointer; min-width: 30px; justify-content: center; }
+.more-menu > summary::-webkit-details-marker { display: none; }
+.more-menu[open] > summary { background: #2a2b2d; }
+.more-pop {
+  position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; min-width: 190px;
+  display: flex; flex-direction: column; align-items: stretch; gap: 4px; padding: 6px;
+  background: #1c1c1c; border: 1px solid #343434; border-radius: 12px; box-shadow: 0 12px 30px #000b;
+}
+.more-pop > .btn, .more-pop > select, .more-pop > a { justify-content: flex-start; width: 100%; text-align: start; }
+.more-pop .name-input { width: 100%; }
+
+/* A clip opened to trim it or extend it. */
+.viewer-back { z-index: 70; }
+.video-viewer { width: min(960px, calc(100vw - 32px)); max-width: none; display: flex; flex-direction: column; gap: 12px; }
+.viewer-head { display: flex; align-items: center; gap: 10px; }
+.viewer-head .prompt { flex: 1; min-width: 0; color: var(--text-2); font-size: 13px; }
+.video-viewer video { width: 100%; max-height: 60dvh; background: #000; border-radius: 10px; display: block; }
+.trim { display: flex; flex-direction: column; gap: 8px; }
+.trim-track { position: relative; height: 34px; border-radius: 8px; background: #232323; }
+.trim-kept { position: absolute; top: 0; bottom: 0; left: var(--from); right: calc(100% - var(--to)); background: #8ab4f833; border: 2px solid #8ab4f8; border-radius: 8px; }
+.trim-head { position: absolute; top: -3px; bottom: -3px; left: var(--at); width: 2px; background: #eee; pointer-events: none; }
+.trim-handle { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; background: transparent; pointer-events: none; -webkit-appearance: none; appearance: none; }
+.trim-handle::-webkit-slider-runnable-track { background: transparent; height: 100%; }
+.trim-handle::-moz-range-track { background: transparent; }
+.trim-handle::-webkit-slider-thumb { -webkit-appearance: none; pointer-events: auto; width: 14px; height: 34px; border-radius: 4px; background: #8ab4f8; cursor: ew-resize; border: 0; }
+.trim-handle::-moz-range-thumb { pointer-events: auto; width: 14px; height: 34px; border-radius: 4px; background: #8ab4f8; cursor: ew-resize; border: 0; }
+.trim-handle:focus-visible::-webkit-slider-thumb { outline: 2px solid #fff; }
+.trim-row { flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; }
+.viewer-actions { flex-wrap: wrap; gap: 8px; }
+@media (max-width: 520px) { .viewer-actions .spacer { display: none; } }
+.voice-filters { flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.voice-filters .seg button { padding: 4px 10px; font-size: 12px; }
+.voice-grid { max-height: 300px; overflow-y: auto; padding-right: 2px; grid-auto-rows: max-content; align-content: start; }
+.voice-option { flex: none; min-height: 52px; }
+/* An image's buttons sit inside its media box in batch rows; the box must not clip their "⋯" menu. */
+.flow-batch .media.image-media { overflow: visible; }
+
+/* ======================================================================
+   Polish pass (ux-notes batch 4): a warm gold accent from the Awqaf logo,
+   softer surfaces, hover states, and the new pieces (quick picks, clip page).
+   ====================================================================== */
+:root {
+  --gold: #e6bd6a;
+  --gold-2: #c8913a;
+  --gold-line: #e6bd6a66;
+  --glass: #161616e6;
+  --lift: 0 18px 40px #000a, 0 2px 0 #ffffff08 inset;
+}
+::selection { background: #e6bd6a55; }
+* { scrollbar-color: #3a3a3a transparent; }
+
+/* Header: a hairline of gold under the bar, credits as a soft pill. */
+.topbar { background: linear-gradient(180deg, #0b0b0b, #050505); border-bottom-color: #1d1d1d; box-shadow: 0 1px 0 #e6bd6a14; }
+.credits-pill { background: linear-gradient(135deg, #1f1a10, #171717); border: 1px solid #3a3020; color: #f1dcae; }
+
+/* Buttons: primary actions in gold. */
+.btn:not(.secondary):not(.ghost):not(.danger) { background: linear-gradient(135deg, var(--gold), var(--gold-2)); color: #1a1206; box-shadow: 0 6px 16px #c8913a33; }
+.btn:not(.secondary):not(.ghost):not(.danger):hover { filter: brightness(1.06); }
+.btn.secondary { transition: background .15s, border-color .15s; }
+.btn.secondary:hover { background: #2c2c2e; border-color: #4a4a4d; filter: none; }
+.link-btn { padding: 0; border: 0; background: none; color: var(--gold); font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+
+/* Sidebar: the open view gets a gold edge. */
+.flow-sidebar button { position: relative; transition: background .15s, color .15s; }
+.flow-sidebar button[aria-pressed="true"] { background: linear-gradient(90deg, #2a2418, #1d1d1d); color: #fff; }
+.flow-sidebar button[aria-pressed="true"]::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 3px; background: var(--gold); }
+.flow-sidebar button[aria-pressed="true"] span { color: var(--gold); }
+
+/* Gallery cards: lift and a soft glow on hover. */
+.studio .flow-grid .tile { transition: transform .18s ease, box-shadow .18s ease, border-color .18s; }
+.studio .flow-grid .tile.ready:hover { transform: translateY(-2px); border-color: #3d3d3d; box-shadow: 0 14px 30px #000c; }
+.studio .flow-grid .tile.running { border-color: var(--gold-line); box-shadow: 0 0 0 1px #e6bd6a22, 0 0 24px #e6bd6a14; }
+.progress i { background: linear-gradient(90deg, var(--gold-2), var(--gold)); }
+.studio .scene-card { transition: border-color .15s, background .15s; }
+.studio .scene-card:hover { border-color: var(--gold-line); }
+.empty { border: 1px dashed #2d2d2d; background: radial-gradient(ellipse at top, #1a1710, #0c0c0c 70%); }
+
+/* A video card is a button that opens the clip's page; hovering plays a silent preview. */
+.video-open { position: relative; display: block; width: 100%; height: 100%; padding: 0; border: 0; background: #000; cursor: pointer; }
+.video-open:disabled { cursor: default; }
+.video-open video, .video-open img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.video-open::after { content: "\2922"; position: absolute; right: 10px; top: 10px; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 999px; background: #000a; color: #fff; opacity: 0; transition: opacity .15s; }
+.video-open:hover::after, .video-open:focus-visible::after { opacity: 1; }
+.video-open:focus-visible { outline: 2px solid var(--gold); outline-offset: -2px; }
+.video-badge { position: absolute; left: 10px; bottom: 10px; padding: 3px 8px; border-radius: 999px; background: #000b; color: #fff; font-size: 11.5px; font-weight: 600; backdrop-filter: blur(6px); }
+.video-badge.extended { left: auto; right: 10px; background: #2a2010d9; color: var(--gold); border: 1px solid var(--gold-line); }
+
+/* Composer: glass, a gold glow while writing, and the prompt box grows with the text. */
+.studio .composer { background: var(--glass); backdrop-filter: blur(14px); border-color: #2c2c2c; transition: border-color .2s, box-shadow .2s; }
+.studio .composer:focus-within { border-color: #4a4130; box-shadow: 0 10px 30px #000a, 0 0 0 3px #e6bd6a14; }
+.studio .composer textarea { min-height: 44px; max-height: 45vh; line-height: 1.5; }
+.flow-generate:not(:disabled) { background: linear-gradient(135deg, var(--gold), var(--gold-2)); color: #1a1206; box-shadow: 0 6px 18px #c8913a40; }
+.flow-generate:not(:disabled) .flow-generate-arrow { background: #1a1206; color: var(--gold); }
+.flow-generate:not(:disabled):hover { filter: brightness(1.07); }
+.kind-seg button.on { background: linear-gradient(135deg, #f3d48f, var(--gold)); color: #1a1206; }
+.setting-chip.open { border-color: var(--gold); }
+.setting-check { color: var(--gold); }
+.setting-opts button.on { background: var(--gold); border-color: var(--gold); color: #1a1206; }
+
+/* Quick picks under the prompt: character, style, camera (shot), light. */
+.quick-picks { display: flex; flex-wrap: wrap; gap: 5px; }
+.pick-chip { height: 26px; padding: 0 9px; font-size: 12px; gap: 6px; max-width: 170px; }
+.pick-chip.set { background: #2a2214; border-color: var(--gold-line); color: #f4dca8; }
+.pick-swatch { width: 14px; height: 14px; border-radius: 4px; flex: none; box-shadow: 0 0 0 1px #fff3 inset; }
+.pick-faces { display: inline-flex; }
+.pick-faces img, .pick-faces span { width: 18px; height: 18px; border-radius: 50%; object-fit: cover; border: 1.5px solid #1a1a1a; margin-inline-start: -6px; display: grid; place-items: center; background: #333; font-size: 10px; }
+.pick-faces > :first-child { margin-inline-start: 0; }
+.pick-pop { width: min(460px, calc(100% - 20px)); }
+.pick-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; }
+.pick-grid.looks { grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); }
+.pick-character { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 4px; border: 1px solid transparent; border-radius: 12px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.pick-character:hover { background: #262626; }
+.pick-character.on { border-color: var(--gold-line); background: #241e12; }
+.pick-character b { font-size: 12px; font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick-avatar { position: relative; width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; background: #2a2a2a; font-size: 22px; box-shadow: 0 0 0 2px #333; }
+.pick-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+.pick-character.on .pick-avatar { box-shadow: 0 0 0 2px var(--gold); }
+.pick-avatar i { position: absolute; right: -2px; bottom: -2px; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; background: var(--gold); color: #1a1206; font-size: 11px; font-style: normal; font-weight: 700; }
+.pick-new .pick-avatar { background: transparent; box-shadow: 0 0 0 1.5px #555 inset; color: #bbb; }
+.pick-look { display: flex; align-items: center; gap: 9px; padding: 6px; border: 1px solid #2e2e2e; border-radius: 12px; background: #1f1f1f; color: inherit; font: inherit; text-align: start; cursor: pointer; transition: border-color .15s, background .15s; min-width: 0; }
+.pick-look:hover { border-color: #454545; background: #252525; }
+.pick-look.on { border-color: var(--gold); background: #2a2214; }
+.pick-look-art { flex: none; width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; background: #2c2c2c; font-size: 16px; color: var(--gold); box-shadow: 0 0 0 1px #ffffff14 inset; }
+.pick-look-copy { display: flex; flex-direction: column; min-width: 0; font-size: 11.5px; }
+.pick-look-copy b { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* The clip page: the clip big on the left, what to do with it on the right; the prompt stays below. */
+.clip-page { display: flex; flex-direction: column; gap: 14px; animation: clip-in .18s ease-out; }
+@keyframes clip-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.clip-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.clip-crumb { min-width: 0; }
+.clip-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); gap: 18px; align-items: start; }
+.clip-stage { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.clip-player { border-radius: 16px; overflow: hidden; background: #000; box-shadow: var(--lift); border: 1px solid #222; }
+.clip-player video, .clip-player img { width: 100%; max-height: 58dvh; display: block; object-fit: contain; background: #000; }
+.clip-side { display: flex; flex-direction: column; gap: 12px; padding: 14px; border: 1px solid #242424; border-radius: 16px; background: linear-gradient(180deg, #151515, #101010); }
+.clip-info { display: flex; flex-direction: column; gap: 8px; }
+.clip-info .prompt { font-size: 13.5px; line-height: 1.55; color: var(--text-2); max-height: 7.8em; overflow: auto; }
+.clip-tags { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.clip-tag { padding: 2px 8px; border-radius: 999px; background: #232323; color: #c9c9c9; }
+.clip-tag.accent { background: #2a2214; color: var(--gold); border: 1px solid var(--gold-line); }
+.clip-group { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid #222; }
+.clip-group-title { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: #8d9196; }
+.clip-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.clip-action { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px; border: 1px solid #2c2c2c; border-radius: 12px; background: #1b1b1b; color: inherit; font: inherit; text-align: start; cursor: pointer; transition: border-color .15s, background .15s, transform .15s; }
+.clip-action:hover:not(:disabled) { border-color: #444; background: #222; transform: translateY(-1px); }
+.clip-action:disabled { opacity: .5; cursor: progress; }
+.clip-action > span:last-child { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.clip-action b { font-size: 13.5px; font-weight: 600; }
+.clip-action small { font-size: 11.5px; color: #9aa0a6; }
+.clip-action-icon { flex: none; width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; background: #2a2a2a; font-size: 16px; }
+.clip-action.primary { border-color: var(--gold-line); background: linear-gradient(135deg, #2a2214, #1b1b1b); }
+.clip-action.primary .clip-action-icon { background: linear-gradient(135deg, var(--gold), var(--gold-2)); color: #1a1206; }
+.clip-action.on { border-color: var(--gold); box-shadow: 0 0 0 3px #e6bd6a1f; }
+.clip-related { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 8px; }
+.clip-related-item { display: flex; flex-direction: column; gap: 4px; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; text-align: start; }
+.clip-related-item img, .clip-related-item > span { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 8px; border: 1px solid #2c2c2c; display: grid; place-items: center; background: #1b1b1b; }
+.clip-related-item:hover img { border-color: var(--gold-line); }
+.clip-related-item small { font-size: 11px; color: #a9a9a9; }
+.trim-kept { background: #e6bd6a22; border-color: var(--gold); }
+.trim-handle::-webkit-slider-thumb { background: var(--gold); }
+.trim-handle::-moz-range-thumb { background: var(--gold); }
+.trim-join { position: absolute; top: 4px; bottom: 4px; width: 2px; margin-left: -1px; background: #fff8; pointer-events: none; border-radius: 2px; }
+.trim-row { justify-content: flex-start; }
+@media (max-width: 900px) { .clip-body { grid-template-columns: minmax(0, 1fr); } }
+
+/* Character editor: the note shown when old voice notes were cleared. */
+.voice-cleared { display: block; margin-top: 4px; padding: 6px 8px; border-radius: 8px; background: #2a2214; color: #f1dcae; }
+
+/* Home: a clear way to start a project, and livelier cards. */
+.home { gap: 24px; }
+.home-title { gap: 6px; }
+.home-title h1 { font-size: 30px; background: linear-gradient(90deg, #fff, #f1dcae); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.home-create { max-width: 440px; }
+.project-card { border: 1px solid #222; transition: transform .18s, box-shadow .18s, border-color .18s; }
+.project-card:hover { transform: translateY(-3px); border-color: #3a3a3a; box-shadow: 0 16px 34px #000c; }
+.project-new { align-items: center; justify-content: center; gap: 6px; padding: 28px 12px; cursor: pointer; color: inherit; font: inherit;
+  background: radial-gradient(ellipse at top, #2a2214, #121212 70%); border: 1.5px dashed var(--gold-line); }
+.project-new:hover { border-style: solid; border-color: var(--gold); }
+.project-new:disabled { opacity: .6; cursor: progress; }
+.project-new b { font-size: 15px; font-weight: 600; }
+.project-new-plus { width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; font-size: 24px; background: linear-gradient(135deg, var(--gold), var(--gold-2)); color: #1a1206; box-shadow: 0 8px 20px #c8913a40; }
+
+/* Character cards. */
+.character-card { transition: transform .18s, border-color .18s; }
+.character-card:hover { transform: translateY(-2px); }

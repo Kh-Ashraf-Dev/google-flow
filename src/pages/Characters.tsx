@@ -75,6 +75,20 @@ export function CharacterEditor({ character, jobs, uploading, onUpload, onClose,
   const [voice, setVoice] = useState(character?.voice ?? '')
   const [voiceId, setVoiceId] = useState<string | null>(character?.voiceId ?? null)
   const [voices, setVoices] = useState<VoiceOption[]>([])
+  // The list is long (presets + Flow's 30), so it's filtered by set and by men / women.
+  const [voiceGroup, setVoiceGroup] = useState<VoiceOption['group']>(() => character?.voiceId?.startsWith('flow-') ? 'flow' : 'preset')
+  const [voiceGender, setVoiceGender] = useState<'all' | VoiceOption['gender']>('all')
+  const shownVoices = voices.filter((option) => option.group === voiceGroup && (voiceGender === 'all' || option.gender === voiceGender))
+  const chosenVoice = voices.find((option) => option.id === voiceId)
+  // Notes written for the old voice ("deep, calm…") are sent with the preset and would override
+  // it, so choosing another preset clears them, with Undo.
+  const [clearedNotes, setClearedNotes] = useState<string | null>(null)
+  function pickVoice(id: string | null) {
+    if (id === voiceId) return
+    setVoiceId(id)
+    if (id !== null && voice.trim()) { setClearedNotes(voice); setVoice('') }
+    else setClearedNotes(null)
+  }
   const [playing, setPlaying] = useState<string | null>(null)
   const [loadingSample, setLoadingSample] = useState<string | null>(null)
   const player = useRef<HTMLAudioElement | null>(null)
@@ -156,15 +170,28 @@ export function CharacterEditor({ character, jobs, uploading, onUpload, onClose,
             value={look} onChange={(event) => setLook(event.target.value)} />
         </label>
         <div className="field">
-          <span>Voice · الصوت</span>
+          <span>Voice · الصوت{chosenVoice ? ` · ${chosenVoice.label}` : ''}</span>
+          <div className="row voice-filters">
+            <div className="seg" role="group" aria-label="Voice set">
+              <button type="button" className={voiceGroup === 'preset' ? 'on' : ''} aria-pressed={voiceGroup === 'preset'} onClick={() => setVoiceGroup('preset')}>Presets</button>
+              <button type="button" className={voiceGroup === 'flow' ? 'on' : ''} aria-pressed={voiceGroup === 'flow'} onClick={() => setVoiceGroup('flow')}
+                title="The 30 voices Google Flow offers, by their Google names (e.g. Enceladus)">Flow voices</button>
+            </div>
+            <div className="seg" role="group" aria-label="Show">
+              {(['all', 'male', 'female'] as const).map((value) => (
+                <button key={value} type="button" className={voiceGender === value ? 'on' : ''} aria-pressed={voiceGender === value}
+                  onClick={() => setVoiceGender(value)}>{value === 'all' ? 'All' : value === 'male' ? 'Men' : 'Women'}</button>
+              ))}
+            </div>
+          </div>
           <div className="voice-grid" role="radiogroup" aria-label="Voice">
-            <button type="button" role="radio" aria-checked={voiceId === null} className={`voice-option${voiceId === null ? ' on' : ''}`} onClick={() => setVoiceId(null)}>
+            <button type="button" role="radio" aria-checked={voiceId === null} className={`voice-option${voiceId === null ? ' on' : ''}`} onClick={() => pickVoice(null)}>
               <span className="voice-name"><b>No preset</b><span className="faint">Describe it below</span></span>
             </button>
-            {voices.map((option) => (
+            {shownVoices.map((option) => (
               <div key={option.id} className={`voice-option${voiceId === option.id ? ' on' : ''}`}>
-                <button type="button" role="radio" aria-checked={voiceId === option.id} className="voice-pick" onClick={() => setVoiceId(option.id)}>
-                  <span className="voice-name"><b>{option.label}</b><span className="faint" dir="rtl">{option.labelAr}</span></span>
+                <button type="button" role="radio" aria-checked={voiceId === option.id} className="voice-pick" onClick={() => pickVoice(option.id)}>
+                  <span className="voice-name"><b>{option.label}</b><span className="faint">{option.style ? <>{option.style} · <span dir="rtl">{option.labelAr}</span></> : <span dir="rtl">{option.labelAr}</span>}</span></span>
                 </button>
                 <button type="button" className="voice-play" aria-label={`${playing === option.id ? 'Stop' : 'Play'} the ${option.label} sample`}
                   onClick={() => playSample(option.id)}>
@@ -176,7 +203,13 @@ export function CharacterEditor({ character, jobs, uploading, onUpload, onClose,
         </div>
         <label className="field"><span>{voiceId ? 'Extra voice notes (optional)' : 'Describe the voice'}</span>
           <textarea className="input" dir="auto" rows={2} maxLength={400} placeholder={voiceId ? 'e.g. speaks Egyptian Arabic, a little slower · بيتكلم مصري' : 'e.g. deep, calm, slow Egyptian Arabic · صوت هادي وعميق'}
-            value={voice} onChange={(event) => setVoice(event.target.value)} />
+            value={voice} onChange={(event) => { setVoice(event.target.value); setClearedNotes(null) }} />
+          {clearedNotes && (
+            <span className="small voice-cleared" role="status">
+              Your old notes (“{clearedNotes.length > 50 ? clearedNotes.slice(0, 50) + '…' : clearedNotes}”) were cleared so they don’t change {chosenVoice?.label ?? 'this voice'}.
+              {' '}<button type="button" className="link-btn" onClick={() => { setVoice(clearedNotes); setClearedNotes(null) }}>Undo</button>
+            </span>
+          )}
           <span className="small faint">The video model gets the voice as a description, so it sounds close to the sample, not identical. It isn’t a copy of a real person’s voice.</span>
         </label>
         {error && <div className="error-text" role="alert">{error}</div>}

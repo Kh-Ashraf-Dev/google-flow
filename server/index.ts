@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
+import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { Readable } from 'node:stream'
 import { serve } from '@hono/node-server'
@@ -8,12 +8,12 @@ import { bodyLimit } from 'hono/body-limit'
 import { login, logout, requireAdmin, requireUser, type AppEnv } from './auth.ts'
 import { config } from './config.ts'
 import { audit, db, initDb, tx } from './db.ts'
-import { advanceJob, createJobs, getJob, JobError, MAX_IMAGE_BYTES, ownProject, saveFrame, uploadImage, upscaleImage, upscaleVideo, recordBlocked, recoverInterruptedJobs, type CreateJobInput, type JobInputs, type JobRow } from './jobs.ts'
+import { advanceJob, createJobs, getJob, JobError, MAX_IMAGE_BYTES, ownProject, saveFrame, trimVideo, uploadImage, upscaleImage, upscaleVideo, recordBlocked, recoverInterruptedJobs, type CreateJobInput, type JobInputs, type JobRow } from './jobs.ts'
 import * as ledger from './ledger.ts'
-import { joinClips } from './media.ts'
+import { frameAt, joinClips } from './media.ts'
 import { hashBcryptPassword, isBcryptHash, isValidNewPassword } from './passwords.ts'
 import { checkPrompt } from './policy.ts'
-import { estimate, IMAGE_UPSCALE_SIZES, imageUpscaleCredits, loadPricing, normalize, pricingRules, upscaleOptions, type GenerationParams, type Resolution } from './pricing.ts'
+import { estimate, IMAGE_UPSCALE_SIZES, imageUpscaleCredits, loadPricing, type ImageUpscaleSize, normalize, pricingRules, upscaleOptions, type GenerationParams, type Resolution } from './pricing.ts'
 import { mp4Seconds } from './provider.ts'
 import { VOICES, voicePreset, voiceSample, voiceText } from './voices.ts'
 
@@ -25,11 +25,9 @@ app.onError((err, c) => {
   return c.json({ error: err.message || 'Something went wrong' }, 500)
 })
 
-// Fly's health check; also tells us the database answers.
-app.get('/healthz', async (c) => {
-  await db.get('SELECT 1')
-  return c.text('ok')
-})
+// Fly's health check, every 30s. It must not touch the database: a query that often keeps the
+// Neon compute awake around the clock, so it never scales to zero.
+app.get('/healthz', (c) => c.text('ok'))
 
 app.post('/api/login', async (c) => {
   const { email, password } = await c.req.json<{ email: string; password: string }>()
@@ -134,6 +132,11 @@ api.post('/jobs/:id/frame', async (c) => {
   return c.json(await jobView(await saveFrame(c.get('user').id, Number(c.req.param('id')), Number(seconds))), 201)
 })
 
+api.post('/jobs/:id/trim', async (c) => {
+  const { start, end } = await c.req.json<{ start: number; end: number }>()
+  return c.json(await jobView(await trimVideo(c.get('user').id, Number(c.req.param('id')), Number(start), Number(end))), 201)
+})
+
 api.post('/jobs/from-images', async (c) => {
   const body = await c.req.json<CreateJobInput>()
   if (!body.images) return c.json({ error: 'Choose images first' }, 400)
@@ -150,7 +153,7 @@ api.post('/images/upload', bodyLimit({
 })
 
 api.post('/assets/:id/upscale', async (c) => {
-  const { size } = await c.req.json<{ size: '2K' | '4K' }>()
+  const { size } = await c.req.json<{ size: ImageUpscaleSize }>()
   return c.json(await jobView(await upscaleImage(c.get('user').id, Number(c.req.param('id')), size)), 201)
 })
 
@@ -560,7 +563,7 @@ api.patch('/projects/:id', async (c) => {
 
 // ---------- voices ----------
 // Preset voices for characters, with a short spoken sample of each (made once, then kept).
-api.get('/voices', (c) => c.json(VOICES.map(({ id, label, labelAr, gender }) => ({ id, label, labelAr, gender }))))
+api.get('/voices', (c) => c.json(VOICES.map(({ id, label, labelAr, gender, group, style }) => ({ id, label, labelAr, gender, group, style }))))
 
 api.get('/voices/:id/sample', async (c) => {
   if (!voicePreset(c.req.param('id'))) return c.json({ error: 'Voice not found' }, 404)
@@ -858,7 +861,7 @@ admin.get('/report', async (c) => {
       COALESCE((SELECT -SUM(e.amount) FROM ledger_entries e JOIN wallets w ON w.id = e.wallet_id
         WHERE w.owner_type = 'user' AND w.owner_id = u.id AND e.type IN ('reserve','commit','refund') AND e.created_at >= $1), 0) AS credits,
       COALESCE((SELECT SUM(j.google_cost_usd) FROM jobs j WHERE j.user_id = u.id AND j.status = 'succeeded' AND j.created_at >= $1), 0) AS "googleUsd",
-      (SELECT COUNT(*) FROM jobs j WHERE j.user_id = u.id AND j.kind = 'video' AND j.status = 'succeeded' AND j.created_at >= $1) AS videos,
+      (SELECT COUNT(*) FROM jobs j WHERE j.user_id = u.id AND j.kind = 'video' AND j.model_key <> 'upload' AND j.status = 'succeeded' AND j.created_at >= $1) AS videos,
       (SELECT COUNT(*) FROM assets a JOIN jobs j ON j.id = a.job_id WHERE j.user_id = u.id AND j.kind = 'image' AND j.model_key <> 'upload' AND j.created_at >= $1) AS images,
       (SELECT COUNT(*) FROM jobs j WHERE j.user_id = u.id AND j.status = 'failed' AND j.created_at >= $1) AS failed,
       (SELECT COUNT(*) FROM jobs j WHERE j.user_id = u.id AND j.status = 'blocked' AND j.created_at >= $1) AS blocked,
@@ -931,6 +934,38 @@ app.get('/media/:file', requireUser, async (c) => {
     return c.body(fileStream(path, start, end), 206, { ...headers, 'content-range': `bytes ${start}-${end}/${size}`, 'content-length': String(end - start + 1) })
   }
   return c.body(fileStream(path, 0, size - 1), 200, { ...headers, 'content-length': String(size) })
+})
+
+// A still of a video (at half a second, past any fade-in), so the gallery shows clips at once
+// and only loads a video when it's played. Made once, kept next to the media, cached for good.
+const posterJobs = new Map<string, Promise<void>>()
+app.get('/media/:file/poster', requireUser, async (c) => {
+  const user = c.get('user')
+  const file = c.req.param('file').replace(/[^\w.-]/g, '')
+  const bin = c.req.query('bin') === '1'
+  const asset = await db.get<{ user_id: number; mime: string }>('SELECT user_id, mime FROM assets WHERE file = ? AND (deleted_at IS NOT NULL) = ?', file, bin)
+  if (!asset || (asset.user_id !== user.id && (bin || user.role !== 'admin')) || !asset.mime.startsWith('video')) return c.text('Not found', 404)
+  const dir = join(config.dataDir, 'media', 'posters')
+  const poster = join(dir, `${file}.jpg`)
+  if (!existsSync(poster)) {
+    let making = posterJobs.get(file)
+    if (!making) {
+      making = frameAt(file, 0.5).then((jpg) => {
+        mkdirSync(dir, { recursive: true })
+        writeFileSync(poster, jpg)
+      }).finally(() => posterJobs.delete(file))
+      posterJobs.set(file, making)
+    }
+    try { await making } catch (err) {
+      console.error('[poster]', file, (err as Error).message)
+      return c.text('No poster', 404)
+    }
+  }
+  return c.body(new Uint8Array(readFileSync(poster)), 200, {
+    'content-type': 'image/jpeg',
+    'cache-control': bin ? 'private, no-store' : 'private, max-age=31536000, immutable',
+    'x-content-type-options': 'nosniff',
+  })
 })
 
 function fileStream(path: string, start: number, end: number) {

@@ -1,17 +1,18 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { ChangeEvent, ClipboardEvent, DragEvent, KeyboardEvent, ReactElement } from 'react'
+import type { ChangeEvent, ClipboardEvent, DragEvent, KeyboardEvent, ReactElement, ReactNode } from 'react'
 import { studioPath, type AppProps, type StudioView } from '../App.tsx'
-import { api, ApiError, clipSeconds, clock, fmt, isArabic, timeAgo, uploadStudioImage, type Character, type Check, type Collection, type Job, type Params, type PickedImage, type Project, type ReuseInputs, type Scene, type Source } from '../api.ts'
+import { api, ApiError, clipSeconds, clock, fmt, isArabic, posterUrl, timeAgo, uploadStudioImage, type Character, type Check, type Collection, type Job, type Params, type ImageUpscaleSize, type PickedImage, type Project, upscaleLabel, type ReuseInputs, type Scene, type Source } from '../api.ts'
 import { SceneBuilder } from './Scene.tsx'
 import { CropImage } from './CropImage.tsx'
 import { AssetPicker, ASSET_CATEGORIES } from './AssetPicker.tsx'
 import { CharacterEditor, CharacterList } from './Characters.tsx'
+import { VideoViewer } from './VideoViewer.tsx'
 
 type Kind = 'video' | 'image'
 type SelectedImage = PickedImage
 type Favorite = (assetId: number, value: boolean) => Promise<void>
 type Rename = (assetId: number, name: string) => Promise<void>
-type SettingName = 'model' | 'format' | 'count'
+type SettingName = 'model' | 'format' | 'count' | 'character' | 'style' | 'camera' | 'light'
 type MentionOption = {
   key: string
   label: string
@@ -37,14 +38,85 @@ function removeAsset(jobs: Job[], assetId: number) {
 // The editing model, chosen when "Edit video" is picked with a model that can't edit.
 const EDIT_MODEL = 'omni-flash-1.2'
 const UPLOAD_TYPES = ['image/png', 'image/jpeg', 'image/webp']
+// One Generate makes one video (×N makes more takes of it), so a video uses at most 3 images:
+// a start image, a start and an end image, or up to 3 ingredients.
+const MAX_VIDEO_IMAGES = 3
+// Set while an image or video from the gallery is dragged, so dropping it on the prompt adds
+// that item instead of uploading a copy.
+const ASSET_DRAG_TYPE = 'application/x-studio-asset'
 type ImageRole = 'start' | 'end' | 'ingredient'
 const ROLE_LABEL: Record<ImageRole, string> = { start: 'Start', end: 'End', ingredient: 'Ingredient' }
 const ROLE_HELP: Record<ImageRole, string> = {
   start: 'The video starts on this image',
-  end: 'The video ends on this image (needs exactly two images)',
-  ingredient: 'Use this image as a reference in one video (up to 3 images)',
+  end: 'The video ends on this image (with two images)',
+  ingredient: 'Use this image as a reference in the video (up to 3 images)',
 }
 const canEditVideo = (modelKey: string) => modelKey.startsWith('omni-')
+
+// Quick picks under the prompt, like the character picker: one tap adds a style, a camera move
+// (a shot for images) or a light to the prompt the model gets. `swatch` colors the option.
+type LookName = 'style' | 'camera' | 'light'
+type Looks = Partial<Record<LookName, string>>
+type LookOption = { id: string; label: string; ar: string; text: string; swatch: string; icon?: string }
+const LOOKS: Record<LookName, { title: string; icon: string; options: (kind: Kind) => LookOption[] }> = {
+  style: {
+    title: 'Style', icon: '✦', options: () => [
+      { id: 'cinematic', label: 'Cinematic', ar: 'سينمائي', text: 'cinematic film look, shallow depth of field, rich color grading', swatch: 'linear-gradient(135deg,#1d2b44,#c08a3e)' },
+      { id: 'documentary', label: 'Documentary', ar: 'وثائقي', text: 'realistic documentary style, natural colors, observational framing', swatch: 'linear-gradient(135deg,#3a3f3a,#8c9a7a)' },
+      { id: 'islamic-art', label: 'Islamic art', ar: 'زخارف إسلامية', text: 'Islamic geometric art, arabesque patterns, gold and deep blue', swatch: 'linear-gradient(135deg,#0f2d5c,#d9b15b)' },
+      { id: 'calligraphy', label: 'Calligraphy', ar: 'خط عربي', text: 'elegant Arabic calligraphy as a visual element, ink and gold leaf textures', swatch: 'linear-gradient(135deg,#2b1b10,#e8d3a1)' },
+      { id: 'watercolor', label: 'Watercolor', ar: 'ألوان مائية', text: 'soft watercolor painting, paper texture, gentle washes of color', swatch: 'linear-gradient(135deg,#8fc3e8,#f3c6d3)' },
+      { id: 'oil', label: 'Oil painting', ar: 'زيت', text: 'classical oil painting, visible brush strokes, warm varnish tones', swatch: 'linear-gradient(135deg,#4a2a14,#b9773a)' },
+      { id: '3d', label: '3D animation', ar: 'أنيميشن 3D', text: 'polished 3D animated film style, soft global illumination, expressive characters', swatch: 'linear-gradient(135deg,#3b6fd8,#f29a5b)' },
+      { id: 'cartoon', label: '2D cartoon', ar: 'كرتون', text: 'friendly 2D cartoon style, clean outlines, flat bright colors', swatch: 'linear-gradient(135deg,#ffcc4d,#ff7a59)' },
+      { id: 'vintage', label: 'Vintage film', ar: 'فيلم قديم', text: 'vintage 1970s film footage, grain, faded warm colors', swatch: 'linear-gradient(135deg,#6b4e2e,#d6b98a)' },
+      { id: 'minimal', label: 'Minimal flat', ar: 'بسيط', text: 'minimal flat illustration, simple shapes, calm limited palette', swatch: 'linear-gradient(135deg,#dfe7e2,#7fa79a)' },
+    ],
+  },
+  camera: {
+    title: 'Camera', icon: '◎', options: (kind) => kind === 'video' ? [
+      { id: 'static', label: 'Still camera', ar: 'ثابتة', text: 'static locked-off camera', swatch: '', icon: '▣' },
+      { id: 'push', label: 'Slow push in', ar: 'زووم بطيء', text: 'slow push-in camera move toward the subject', swatch: '', icon: '⊕' },
+      { id: 'pull', label: 'Pull back reveal', ar: 'رجوع للخلف', text: 'camera slowly pulls back to reveal the scene', swatch: '', icon: '⊖' },
+      { id: 'pan', label: 'Pan', ar: 'بان', text: 'smooth horizontal pan across the scene', swatch: '', icon: '⇆' },
+      { id: 'orbit', label: 'Orbit', ar: 'دوران', text: 'camera orbits slowly around the subject', swatch: '', icon: '↻' },
+      { id: 'drone', label: 'Drone shot', ar: 'درون', text: 'aerial drone shot gliding over the scene', swatch: '', icon: '✈' },
+      { id: 'tracking', label: 'Tracking', ar: 'متابعة', text: 'tracking shot following the subject', swatch: '', icon: '➝' },
+      { id: 'handheld', label: 'Handheld', ar: 'محمولة', text: 'handheld camera with subtle natural movement', swatch: '', icon: '✋' },
+      { id: 'slowmo', label: 'Slow motion', ar: 'تصوير بطيء', text: 'slow motion', swatch: '', icon: '◔' },
+      { id: 'timelapse', label: 'Timelapse', ar: 'تايم لابس', text: 'timelapse', swatch: '', icon: '◷' },
+    ] : [
+      { id: 'close', label: 'Close-up', ar: 'قريبة', text: 'close-up shot', swatch: '', icon: '◉' },
+      { id: 'medium', label: 'Medium shot', ar: 'متوسطة', text: 'medium shot', swatch: '', icon: '◎' },
+      { id: 'wide', label: 'Wide shot', ar: 'واسعة', text: 'wide establishing shot', swatch: '', icon: '▭' },
+      { id: 'aerial', label: 'Aerial', ar: 'من فوق', text: 'aerial view from above', swatch: '', icon: '✈' },
+      { id: 'low', label: 'Low angle', ar: 'زاوية منخفضة', text: 'low angle shot looking up', swatch: '', icon: '⤒' },
+      { id: 'portrait', label: 'Portrait', ar: 'بورتريه', text: 'portrait photography, 85mm lens, soft background blur', swatch: '', icon: '☺' },
+    ],
+  },
+  light: {
+    title: 'Light', icon: '☀', options: () => [
+      { id: 'golden', label: 'Golden hour', ar: 'الغروب', text: 'warm golden hour sunlight', swatch: 'linear-gradient(135deg,#f6b44c,#e0603a)' },
+      { id: 'blue', label: 'Blue hour', ar: 'بعد المغرب', text: 'cool blue hour twilight', swatch: 'linear-gradient(135deg,#1b2a6b,#5a7fd1)' },
+      { id: 'lanterns', label: 'Ramadan night', ar: 'ليلة رمضان', text: 'night lit by glowing Ramadan lanterns (fawanees), warm festive light, crescent moon', swatch: 'linear-gradient(135deg,#120d2e,#f2a93b)' },
+      { id: 'daylight', label: 'Soft daylight', ar: 'نهار هادي', text: 'soft natural daylight', swatch: 'linear-gradient(135deg,#cfe3f2,#fff3d6)' },
+      { id: 'dramatic', label: 'Dramatic', ar: 'درامي', text: 'dramatic high-contrast lighting with deep shadows', swatch: 'linear-gradient(135deg,#050505,#8a8a8a)' },
+      { id: 'interior', label: 'Warm interior', ar: 'إضاءة دافية', text: 'warm cozy interior lighting', swatch: 'linear-gradient(135deg,#5b2f12,#f0a35e)' },
+      { id: 'dawn', label: 'Misty dawn', ar: 'فجر', text: 'misty dawn light, soft haze', swatch: 'linear-gradient(135deg,#9bb0c4,#f1d7c7)' },
+      { id: 'mosque', label: 'Mosque light', ar: 'نور المسجد', text: 'soft light streaming through mosque windows, gentle rays', swatch: 'linear-gradient(135deg,#2c3e2f,#e9d9a6)' },
+    ],
+  },
+}
+const LOOK_NAMES: LookName[] = ['style', 'camera', 'light']
+const lookOption = (name: LookName, id: string | undefined, kind: Kind) => id ? LOOKS[name].options(kind).find((option) => option.id === id) : undefined
+// The prompt with its quick picks, as the model (and the content check) gets it.
+function withLooks(prompt: string, looks: Looks, kind: Kind) {
+  const parts = LOOK_NAMES.flatMap((name) => {
+    const option = lookOption(name, looks[name], kind)
+    return option ? [`${name === 'camera' ? (kind === 'video' ? 'Camera' : 'Shot') : LOOKS[name].title}: ${option.text}`] : []
+  })
+  return parts.length ? `${prompt.trim()}\n\n${parts.join('. ')}.` : prompt
+}
 
 // Per-viewer preferences; storage can be blocked, so every access is guarded.
 function stored<T extends string>(key: string, fallback: T, allowed: readonly T[]): T {
@@ -91,6 +163,9 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
   const [characters, setCharacters] = useState<Character[]>([])
   const [promptCharacters, setPromptCharacters] = useState<number[]>([])
   const [editingCharacter, setEditingCharacter] = useState<Character | null | 'new'>(null)
+  // A clip opened on its own page (its URL holds the id); the note says what just happened to it.
+  const [clipNotice, setClipNotice] = useState<{ id: number; text: string } | null>(null)
+  const [fetchedClip, setFetchedClip] = useState<Job | null>(null)
   // Which settings popover is open above the prompt: model, format (shape · resolution · length) or count.
   const [openSetting, setOpenSetting] = useState<SettingName | null>(null)
   const workspace = useRef<HTMLDivElement>(null)
@@ -135,15 +210,29 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
     }
   }, [openSetting])
   const toggleSetting = (name: SettingName) => setOpenSetting((open) => open === name ? null : name)
+  function setLook(name: LookName, id: string | undefined) {
+    setLooksState((previous) => ({ ...previous, [name]: id }))
+    setCheck(null)
+    setOpenSetting(null)
+  }
   const [kind, setKind] = useState<Kind>('video')
   const [params, setParams] = useState<Params>(DEFAULTS.video)
   const [prompt, setPrompt] = useState('')
+  const promptRef = useRef(prompt)
+  useEffect(() => { promptRef.current = prompt }, [prompt])
+  // Quick picks under the prompt (style, camera or shot, light); they're added to the prompt on Generate.
+  const [looks, setLooksState] = useState<Looks>({})
   const [check, setCheck] = useState<Check | null>(null)
   const checkedAt = useRef(0)
+  // The text a kept check was made for (the prompt with its quick picks).
+  const checkedText = useRef('')
   const [finalPrompt, setFinalPrompt] = useState('')
   const [cost, setCost] = useState<number | null>(null)
-  const [busy, setBusy] = useState<'generate' | null>(null)
-  const [pending, setPending] = useState<{ prompt: string; kind: Kind; count: number } | null>(null)
+  // Generate never locks the composer: each press shows a card while its prompt is checked and
+  // its job starts, and you can write and start the next one meanwhile.
+  const [pending, setPending] = useState<{ id: number; prompt: string; kind: Kind; count: number }[]>([])
+  const submitting = pending.length > 0
+  const pendingId = useRef(0)
   const [error, setError] = useState('')
   const [scenes, setScenes] = useState<Scene[]>([])
   const [scenesLoaded, setScenesLoaded] = useState(false)
@@ -154,9 +243,16 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
   const [uploading, setUploading] = useState(false)
   const [upscaling, setUpscaling] = useState<number | null>(null)
   const [images, setImages] = useState<SelectedImage[]>([])
-  const [imageMode, setImageMode] = useState<ImageMode>('separate')
+  // Only matters with two images (Start → End or two Ingredients), or one image next to a character.
+  const [chosenImageMode, setImageMode] = useState<ImageMode>('frames')
   const chosenCharacters = promptCharacters.flatMap((id) => characters.filter((item) => item.id === id))
   const characterImages = chosenCharacters.reduce((sum, item) => sum + item.images.length, 0)
+  // Every Generate is one video; the number of images decides how they're used:
+  // 1 = the start image · 2 = Start → End (or both Ingredients) · 3 = Ingredients.
+  // ('separate' is the server's name for a start-image video.)
+  const imageMode: ImageMode = images.length >= 3 ? 'references'
+    : images.length === 2 ? (chosenImageMode === 'references' ? 'references' : 'frames')
+    : images.length === 1 && chosenImageMode === 'references' && characterImages > 0 ? 'references' : 'separate'
   // A plain video prompt with characters sends their pictures as reference images.
   const characterReferences = kind === 'video' && characterImages > 0 && images.length === 0 && !source
   const usesReferences = kind === 'video' && ((images.length > 0 && imageMode === 'references') || characterReferences)
@@ -191,6 +287,15 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
     navigate(studioPath(projectId, next))
   }
 
+  // A project just made on Home opens with its name selected, ready to type over.
+  const titleInput = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (!project || !new URLSearchParams(window.location.search).has('new')) return
+    window.history.replaceState(null, '', window.location.pathname)
+    titleInput.current?.focus()
+    titleInput.current?.select()
+  }, [project])
+
   async function renameProject(value: string) {
     if (!project) return
     const name = value.trim()
@@ -202,9 +307,15 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
     }
   }
 
+  // Collections opened before show at once from memory while they're fetched again.
+  const collectionCache = useRef(new Map<number, Job[]>())
+  useEffect(() => { if (collectionMedia) collectionCache.current.set(collectionMedia.id, collectionMedia.jobs) }, [collectionMedia])
   useEffect(() => {
     if (activeCollection === null) return
     let current = true
+    const cached = collectionCache.current.get(activeCollection)
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- show the remembered list while it reloads
+    if (cached) setCollectionMedia({ id: activeCollection, jobs: cached })
     api<Job[]>(`/collections/${activeCollection}/jobs`).then((items) => {
       if (current) setCollectionMedia({ id: activeCollection, jobs: items })
     }).catch((err: Error) => {
@@ -237,6 +348,18 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
     })
     return () => { current = false }
   }, [mediaFilter, activeCollection, projectId, favoritesVersion])
+
+  useEffect(() => {
+    const id = view.clipId
+    if (id == null || jobsRef.current.some((item) => item.id === id)) return
+    let current = true
+    api<Job>(`/jobs/${id}`).then((item) => { if (current) setFetchedClip(item) }).catch((err: Error) => { if (current) setError(err.message) })
+    return () => { current = false }
+  }, [view.clipId])
+
+  // A clip's page opens at its top, not at the gallery's scroll position.
+  const mediaArea = useRef<HTMLElement>(null)
+  useLayoutEffect(() => { if (view.clipId != null) mediaArea.current?.scrollTo({ top: 0 }) }, [view.clipId])
 
   function showBin() {
     if (mediaFilter === 'bin') return
@@ -273,13 +396,12 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
     }
   }
 
-  async function upscaleImage(assetId: number, size: '2K' | '4K') {
+  async function upscaleImage(assetId: number, size: ImageUpscaleSize) {
     setUpscalingImage(assetId)
     setError('')
     try {
       const created = await api<Job>(`/assets/${assetId}/upscale`, { size })
       setJobs((previous) => [created, ...previous])
-      if (created.status === 'failed') setError(`Upscale failed: ${created.error ?? 'no image came back'}. The credits were refunded.`)
       await refreshMe()
     } catch (err) {
       setError((err as Error).message)
@@ -423,13 +545,14 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
     setSource({ job, mode: 'extend' })
     if (kind !== 'video') { setKind('video'); setParams(DEFAULTS.video) }
     setCheck(null)
+    requestAnimationFrame(() => promptBox.current?.focus())
   }
 
   // Change a finished video with a prompt. Only Omni edits, and the result keeps the clip's length.
   function editVideo(job: Job) {
     setImages([])
     setEditImages([])
-    setImageMode('separate')
+    setImageMode('frames')
     setSource({ job, mode: 'edit' })
     setKind('video')
     setParams((previous) => {
@@ -438,6 +561,7 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
     })
     setCheck(null)
     setError('')
+    requestAnimationFrame(() => promptBox.current?.focus())
   }
 
   async function saveFrame(job: Job, seconds: number) {
@@ -453,26 +577,45 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
     }
   }
 
-  async function extendInNewScene(job: Job) {
-    try {
-      await newScene([job.id])
-      extendFrom(job)
-    } catch (err) {
-      setError((err as Error).message)
-    }
+  // Trimming saves a new clip next to the original; the viewer then shows the new one.
+  async function trimClip(job: Job, start: number, end: number) {
+    const created = await api<Job>(`/jobs/${job.id}/trim`, { start, end })
+    setJobs((previous) => [created, ...previous])
+    setClipNotice({ id: created.id, text: `Saved as a new ${clock(clipSeconds(created))} clip in your gallery; the original is unchanged. Extend it, or trim it again.` })
+    openClip(created)
+  }
+
+  // The frame you're on becomes the start image of the next video.
+  async function continueFromFrame(job: Job, seconds: number) {
+    const frame = await api<Job>(`/jobs/${job.id}/frame`, { seconds })
+    setJobs((previous) => [frame, ...previous])
+    if (!frame.assets[0]) return
+    if (kind !== 'video') { setKind('video'); setParams(DEFAULTS.video) }
+    // As a Start image, so an End image or more images can still be added.
+    setEditImages([])
+    setSource(null)
+    setImages([{ jobId: frame.id, assetId: frame.assets[0].id, url: frame.assets[0].url }])
+    setImageMode('frames')
+    setCheck(null)
+    setError('')
+    promptBox.current?.focus()
+  }
+
+  function openClip(job: Job) {
+    if (view.clipId === job.id) return
+    setError('')
+    navigate(studioPath(projectId, { clipId: job.id }))
   }
 
   function selectImage(job: Job, assetId: number) {
     const asset = job.assets.find((item) => item.id === assetId)
     if (!asset) return
     if (images.some((item) => item.assetId === assetId)) {
-      setImages((previous) => previous.filter((item) => item.assetId !== assetId))
-      setError('')
+      removeImage(assetId)
       return
     }
-    const max = imageMode === 'frames' ? 2 : imageMode === 'references' ? 3 : 4
-    if (images.length >= max) {
-      setError(`Choose up to ${max} images for this mode.`)
+    if (images.length >= MAX_VIDEO_IMAGES) {
+      setError(`Choose up to ${MAX_VIDEO_IMAGES} images for a video.`)
       return
     }
     setImages((previous) => [...previous, { jobId: job.id, assetId, url: asset.url }])
@@ -483,12 +626,24 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
       setKind('video')
       setParams(DEFAULTS.video)
     }
-    if (imageMode === 'references') selectReferenceModel()
-    if (imageMode === 'frames') selectFramesModel()
+    afterImagesAdded(images.length + 1)
+  }
+
+  // A second image becomes the End image (or another Ingredient); a third makes them all Ingredients.
+  function afterImagesAdded(count: number) {
+    if (count >= 3 || (count === 2 && chosenImageMode === 'references')) selectReferenceModel()
+    else if (count === 2) selectFramesModel()
+  }
+
+  // Taking one of three Ingredients away keeps the other two as Ingredients; otherwise two images
+  // go back to Start → End, and one image is the start image.
+  function removeImage(assetId: number) {
+    setImages((previous) => previous.filter((image) => image.assetId !== assetId))
+    setImageMode(images.length === 3 ? 'references' : 'frames')
+    setError('')
   }
 
   function startEdit(job: Job, assetId: number) {
-    if (busy) return
     const asset = job.assets.find((item) => item.id === assetId)
     if (!asset) return
     const alreadySelected = editImages.some((image) => image.assetId === assetId)
@@ -518,7 +673,7 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
       extendFrom(job)
     } else {
       const selected = kind === 'image' ? editImages : images
-      const limit = kind === 'image' || imageMode === 'references' ? 3 : imageMode === 'frames' ? 2 : 4
+      const limit = kind === 'image' ? 3 : MAX_VIDEO_IMAGES
       if (!selected.some((item) => item.assetId === asset.id)) {
         if (selected.length >= limit) {
           setError(`Choose up to ${limit} images for this prompt.`)
@@ -542,10 +697,11 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
   async function reusePrompt(job: Job) {
     switchKind(job.kind)
     setImages([])
-    setImageMode('separate')
+    setImageMode('frames')
     setSource(null)
     setEditImages([])
     setPromptCharacters([])
+    setLooksState({})
     const modelAvailable = me.pricing.some((model) => model.model_key === job.modelKey)
     setParams(modelAvailable ? job.params : DEFAULTS[job.kind])
     setPrompt(job.promptOriginal)
@@ -556,8 +712,12 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
       const inputs = await api<ReuseInputs>(`/jobs/${job.id}/inputs`)
       if (inputs.editImages.length) setEditImages(inputs.editImages)
       if (inputs.images?.items.length) {
-        setImages(inputs.images.items)
+        // Older prompts could make a video per image; now one Generate is one video, so such a
+        // prompt comes back with its first image.
+        const several = inputs.images.mode === 'separate' && inputs.images.items.length > 1
+        setImages(several ? inputs.images.items.slice(0, 1) : inputs.images.items.slice(0, MAX_VIDEO_IMAGES))
         setImageMode(inputs.images.mode)
+        if (several) setError('This prompt made a video per image; it comes back with its first image. Add an End image or Ingredients if you need them.')
       }
       if (inputs.source) setSource(inputs.source)
       setPromptCharacters(inputs.characterIds)
@@ -603,16 +763,21 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
 
   // Pasted or dropped images: upload them and put them in the prompt, like choosing them from "+".
   async function addFilesToPrompt(files: File[]) {
-    if (busy !== null) return
     const { uploaded, errors } = await uploadFiles(files)
     const picked = uploaded.flatMap((job) => job.assets[0] ? [{ jobId: job.id, assetId: job.assets[0].id, url: job.assets[0].url }] : [])
+    addPickedToPrompt(picked, errors)
+  }
+
+  // Images already in the project (uploaded just now, or dragged from the gallery) join the prompt.
+  function addPickedToPrompt(picked: SelectedImage[], errors: string[] = []) {
     if (!picked.length) return
     const editing = kind === 'image'
     const selected = editing ? editImages : images
-    const limit = editing || imageMode === 'references' ? 3 : imageMode === 'frames' ? 2 : 4
+    const limit = editing ? 3 : MAX_VIDEO_IMAGES
+    const fresh = picked.filter((item) => !selected.some((s) => s.assetId === item.assetId))
     const room = Math.max(0, limit - selected.length)
-    const added = picked.filter((item) => !selected.some((s) => s.assetId === item.assetId)).slice(0, room)
-    if (added.length < picked.length) setError([...errors, `Up to ${limit} images fit this prompt, so ${picked.length - added.length} ${picked.length - added.length > 1 ? 'were' : 'was'} only saved to the gallery.`].join(' · '))
+    const added = fresh.slice(0, room)
+    if (added.length < fresh.length) setError([...errors, `Up to ${limit} images fit this prompt, so ${fresh.length - added.length} ${fresh.length - added.length > 1 ? 'were' : 'was'} left out.`].join(' · '))
     if (!added.length) return
     setSource(null)
     setCheck(null)
@@ -623,14 +788,35 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
     } else {
       setEditImages([])
       setImages((previous) => [...previous, ...added])
-      if (imageMode === 'references') selectReferenceModel()
-      if (imageMode === 'frames') selectFramesModel()
+      afterImagesAdded(selected.length + added.length)
     }
+  }
+
+  // A gallery item dropped on the page: an image joins the prompt as itself (no second upload),
+  // and a video becomes the clip to extend.
+  function dropGalleryItem(data: string) {
+    try {
+      const { jobId, assetId } = JSON.parse(data) as { jobId: number; assetId: number }
+      const job = jobs.find((item) => item.id === jobId) ?? favoriteJobs?.find((item) => item.id === jobId) ?? collectionMedia?.jobs.find((item) => item.id === jobId)
+      const asset = job?.assets.find((item) => item.id === assetId)
+      if (!job || !asset) return
+      if (job.kind === 'video') extendFrom(job)
+      else addPickedToPrompt([{ jobId, assetId, url: asset.url }])
+    } catch { /* not one of ours */ }
   }
 
   // @ mentions: typing @ lists the project's images and videos and your characters; picking one
   // writes @Name in the prompt and adds it, the same as choosing it from "+".
   const promptBox = useRef<HTMLTextAreaElement>(null)
+  // The prompt box grows with what you write (like Flow), up to about half the screen, then scrolls.
+  useLayoutEffect(() => {
+    const box = promptBox.current
+    if (!box) return
+    box.style.height = 'auto'
+    const max = Math.max(160, Math.round(window.innerHeight * 0.45))
+    box.style.height = Math.min(box.scrollHeight + 2, max) + 'px'
+    box.style.overflowY = box.scrollHeight + 2 > max ? 'auto' : 'hidden'
+  }, [prompt])
   const [mention, setMention] = useState<{ query: string; start: number; end: number } | null>(null)
   const [mentionIndex, setMentionIndex] = useState(0)
   function findMention(box: HTMLTextAreaElement) {
@@ -701,7 +887,8 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
   const dragDepth = useRef(0)
   const [dropping, setDropping] = useState(false)
   const modalOpen = pickerOpen || cropImage !== null || editingCharacter !== null
-  const carriesFiles = (event: DragEvent) => !modalOpen && event.dataTransfer.types.includes('Files')
+  // A gallery drag is checked first: browsers also list a dragged page image as "Files".
+  const carriesFiles = (event: DragEvent) => !modalOpen && (event.dataTransfer.types.includes(ASSET_DRAG_TYPE) || event.dataTransfer.types.includes('Files'))
   const dropHandlers = {
     onDragEnter: (event: DragEvent) => {
       if (!carriesFiles(event)) return
@@ -724,7 +911,9 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
       event.preventDefault()
       dragDepth.current = 0
       setDropping(false)
-      void addFilesToPrompt(Array.from(event.dataTransfer.files))
+      const galleryItem = event.dataTransfer.getData(ASSET_DRAG_TYPE)
+      if (galleryItem) dropGalleryItem(galleryItem)
+      else void addFilesToPrompt(Array.from(event.dataTransfer.files))
     },
   }
 
@@ -743,46 +932,34 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
   }
 
   function changeImageMode(mode: ImageMode) {
-    if (mode === 'references' && images.length > 3) {
-      setError('Remove one image to use Veo’s three-image reference mode.')
-      return
-    }
-    if (mode === 'frames' && images.length > 2) {
-      setError('Keep two images: the first starts the video, the second ends it.')
-      return
-    }
     setImageMode(mode)
     setError('')
     if (mode === 'references') selectReferenceModel()
     if (mode === 'frames') selectFramesModel()
   }
 
-  // Each selected image shows its role; the roles together pick the mode the server gets:
-  // all Start = a video per image · Start + End = one video between them · all Ingredient = one video.
+  // Each selected image shows its role in the one video: Start, End or Ingredient.
   function imageRole(index: number): ImageRole {
     if (imageMode === 'references') return 'ingredient'
     if (imageMode === 'frames') return index === 1 ? 'end' : 'start'
     return 'start'
   }
 
+  // One video has one start and one end, so Start and End fit only up to two images;
+  // a single image is an Ingredient only next to a character's images.
   function roleAllowed(role: ImageRole) {
+    if (role === 'start') return images.length <= 2
     if (role === 'end') return images.length === 2
-    if (role === 'ingredient') return images.length <= 3
-    return true
+    return images.length >= 2 || characterImages > 0
   }
 
   function setImageRole(index: number, role: ImageRole) {
-    if (role === imageRole(index)) return
+    if (role === imageRole(index) || !roleAllowed(role)) return
     if (role === 'ingredient') return changeImageMode('references')
-    if (role === 'end') {
-      // The end image goes second; the other image becomes the start.
-      if (index === 0) setImages((previous) => [...previous].reverse())
-      if (imageMode !== 'frames') changeImageMode('frames')
-      return
-    }
-    // Start: in Start → End this swaps the two; from Ingredients every image becomes a start.
-    if (imageMode === 'frames') setImages((previous) => [...previous].reverse())
-    else changeImageMode('separate')
+    if (images.length === 1) return changeImageMode('separate')
+    // Two images: this one becomes the End (or the Start) and the other one the opposite.
+    if ((role === 'end') === (index === 0)) setImages((previous) => [...previous].reverse())
+    changeImageMode('frames')
   }
 
   // Start and end frames work on Veo 3.1 Quality and Fast; Fast is the cheaper one.
@@ -865,30 +1042,42 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
     // eslint-disable-next-line react-hooks/set-state-in-effect -- re-fit when a source is picked or dropped
     if (kind === 'video') setParams((p) => fit(p))
   }, [kind, fit])
+  // Switching between Video and Image keeps the images you chose: video images become the images
+  // to edit or combine (up to 3), and those become start images. A clip to extend or edit stays
+  // with video only, but a still image it started from comes along.
   const switchKind = (k: Kind) => {
     if (k === kind) return
+    const stills = k === 'image'
+      ? [...images, ...(source?.mode === 'animate' ? [{ jobId: source.job.id, assetId: source.assetId ?? source.job.assets[0]?.id, url: (source.job.assets.find((a) => a.id === source.assetId) ?? source.job.assets[0])?.url }] : [])]
+        .filter((item): item is SelectedImage => item.assetId != null && !!item.url)
+      : editImages
+    const carried = stills.slice(0, k === 'image' ? 3 : MAX_VIDEO_IMAGES)
     setKind(k)
-    setParams(DEFAULTS[k])
+    setParams(k === 'image' && carried.length ? { ...DEFAULTS.image, count: 1 } : DEFAULTS[k])
     setSource(null)
-    setEditImages([])
-    setImages([])
-    setImageMode('separate')
+    setEditImages(k === 'image' ? carried : [])
+    setImages(k === 'video' ? carried : [])
+    setImageMode('frames')
     setCheck(null)
+    if (stills.length > carried.length) setError(`Images take up to 3 pictures, so ${stills.length - carried.length} ${stills.length - carried.length > 1 ? 'were' : 'was'} left out.`)
   }
 
   async function generate() {
-    if (busy !== null || !prompt.trim() || !enough || !withinToday || !enoughReferences) return
+    if (!prompt.trim() || !enough || !withinToday || !enoughReferences) return
     setOpenSetting(null)
-    setBusy('generate')
     setError('')
+    // Everything this press uses, read now: you can change the prompt while it's being sent.
+    const text = withLooks(prompt, looks, kind)
+    const sent = { prompt, kind, params, images, imageMode, editImages, source, characters: promptCharacters, scene }
+    const id = ++pendingId.current
     // Show a card right away: the content check and job setup take a few seconds.
-    setPending({ prompt, kind, count: (images.length && imageMode === 'separate' ? images.length : 1) * videoCount })
+    setPending((list) => [{ id, prompt: text, kind, count: (images.length && imageMode === 'separate' ? images.length : 1) * videoCount }, ...list])
     const editsMedia = editImages.length > 0 || source?.mode === 'edit'
     // The server accepts a check for 30 minutes; a kept one is checked again before that.
-    const reuse = check && Date.now() - checkedAt.current < 25 * 60 * 1000 ? check : null
+    const reuse = check && checkedText.current === text && Date.now() - checkedAt.current < 25 * 60 * 1000 ? check : null
     try {
-      const checked = reuse ?? await api<Check>('/prompt/check', { prompt, editImage: editsMedia })
-      if (!reuse) checkedAt.current = Date.now()
+      const checked = reuse ?? await api<Check>('/prompt/check', { prompt: text, editImage: editsMedia })
+      if (!reuse) { checkedAt.current = Date.now(); checkedText.current = text }
       const checkedPrompt = reuse ? finalPrompt : checked.enhancedPrompt
       setCheck(checked)
       setFinalPrompt(checkedPrompt)
@@ -896,40 +1085,42 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
       // "Review" matches still generate, and the job is marked Needs review for the admin.
       if (!checked.allowed || !checkedPrompt.trim()) return
       const request = {
-        checkId: checked.checkId, finalPrompt: checkedPrompt, params,
-        editImages: editImages.length ? editImages.map(({ jobId, assetId }) => ({ jobId, assetId })) : undefined,
-        sourceJobId: source && source.mode !== 'edit' ? source.job.id : undefined, sourceAssetId: source?.assetId,
-        editVideoJobId: source?.mode === 'edit' ? source.job.id : undefined,
-        sceneId: kind === 'video' ? scene?.id : undefined,
+        checkId: checked.checkId, finalPrompt: checkedPrompt, params: sent.params,
+        editImages: sent.editImages.length ? sent.editImages.map(({ jobId, assetId }) => ({ jobId, assetId })) : undefined,
+        sourceJobId: sent.source && sent.source.mode !== 'edit' ? sent.source.job.id : undefined, sourceAssetId: sent.source?.assetId,
+        editVideoJobId: sent.source?.mode === 'edit' ? sent.source.job.id : undefined,
+        sceneId: sent.kind === 'video' ? sent.scene?.id : undefined,
         projectId,
-        characterIds: promptCharacters.length ? promptCharacters : undefined,
+        characterIds: sent.characters.length ? sent.characters : undefined,
       }
-      const created = images.length
+      const created = sent.images.length
         ? await api<Job[]>('/jobs/from-images', {
           ...request,
-          images: { mode: imageMode, items: images.map(({ jobId, assetId }) => ({ jobId, assetId })) },
+          images: { mode: sent.imageMode, items: sent.images.map(({ jobId, assetId }) => ({ jobId, assetId })) },
         })
         : await api<Job[]>('/jobs', request)
       setJobs((prev) => [...created].reverse().concat(prev))
-      setPending(null)
       // Keeping the prompt keeps everything it was made with (text, characters, images, start
-      // frame or video), so you can make more takes; the passed check is reused while it's valid.
-      if (!keepPrompt) {
+      // frame or video), so you can make more takes. Otherwise it's cleared, unless you already
+      // started writing the next one.
+      if (!keepPrompt && promptRef.current === sent.prompt) {
         setPrompt('')
         setPromptCharacters([])
+        setLooksState({})
         setCheck(null)
         setSource(null)
         setEditImages([])
         setImages([])
-        setImageMode('separate')
+        setImageMode('frames')
       }
-      if (kind === 'video' && scene) updateScene(await api<Scene>(`/scenes/${scene.id}`))
+      // Started from a clip's page: go back to the gallery, where the new card is.
+      if (view.clipId != null) go({})
+      if (sent.kind === 'video' && sent.scene) updateScene(await api<Scene>(`/scenes/${sent.scene.id}`))
       await refreshMe()
     } catch (err) {
       setError((err as Error).message)
     } finally {
-      setPending(null)
-      setBusy(null)
+      setPending((list) => list.filter((item) => item.id !== id))
     }
   }
 
@@ -956,6 +1147,21 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
     ]
     return { key: p.model_key, label: p.label, price: modelPrice(p), tags, blocked }
   })
+  // One short line under the tray says what the attached items will make.
+  const attachHint = (() => {
+    if (kind === 'image') {
+      if (editImages.length > 1) return 'One image combining these.'
+      if (editImages.length === 1) return chosenCharacters.length ? 'Edits this image, with the characters as references.' : 'Edits this image.'
+      return 'The characters’ images go to the model as references.'
+    }
+    const people = chosenCharacters.length ? (chosenCharacters.length > 1 ? ' The characters' : ` ${chosenCharacters[0].name}`) : ''
+    if (source?.mode === 'extend') return `Continues from the clip’s last frame${scene ? ', placed right after it in the scene' : ', joined onto it as one longer video'}.${people && `${people} keep${chosenCharacters.length > 1 ? '' : 's'} their look and voice.`}`
+    if (source?.mode === 'edit') return 'Describe the change. Omni keeps the rest of the shot.'
+    if (usesFrames) return `One video from Start to End. ${typeof caps?.endFrameDuration === 'object' ? `Up to ${caps.endFrameDuration.max}s on this model.` : `${caps?.endFrameDuration ?? 8}s on this model.`}`
+    if (usesReferences && images.length) return `One video using ${images.length > 1 ? 'these images' : 'this image'} as ingredients (up to 3${characterImages ? ', counting characters’ images' : ''}).`
+    if (images.length === 1 || source) return `The video starts on this image. Add a second image to end on it.${people && `${people} keep${chosenCharacters.length > 1 ? '' : 's'} their look and voice.`}`
+    return 'Their images go to the model as references, with their look and voice.'
+  })()
   const showAspect = editImages.length === 0
   const aspectOptions = caps?.autoAspect ? ['auto', '16:9', '9:16'] as const : ['16:9', '9:16'] as const
   const lengthOptions: number[] = []
@@ -974,11 +1180,16 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
   const showCount = !(kind === 'video' && editing)
   const countValue = kind === 'video' ? videoCount : params.count ?? 1
   const currentCollection = collections.find((item) => item.id === activeCollection)
+  // Favorites show at once from the media already loaded; the server's list replaces them when it arrives.
+  const localFavorites = jobs.flatMap((job) => {
+    const assets = job.assets.filter((asset) => asset.favorite)
+    return assets.length ? [{ ...job, assets }] : []
+  })
   const collectionLoading = activeCollection !== null && collectionMedia?.id !== activeCollection
   const inBin = mediaFilter === 'bin'
   const inFavorites = mediaFilter === 'favorites' && activeCollection === null
   const currentJobs = inBin ? bin?.jobs ?? [] : activeCollection !== null ? (collectionMedia?.id === activeCollection ? collectionMedia.jobs : [])
-    : inFavorites ? favoriteJobs ?? [] : jobs
+    : inFavorites ? favoriteJobs ?? localFavorites : jobs
   const kindFilter = mediaFilter === 'image' || mediaFilter === 'video' || mediaFilter === 'uploads' ? mediaFilter : 'all'
   const visibleJobs = currentJobs.filter((job) => (inBin || kindFilter === 'all' || (kindFilter === 'uploads' ? job.modelKey === 'upload' : job.kind === kindFilter)) &&
     `${job.promptOriginal} ${job.promptFinal ?? ''}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()))
@@ -987,14 +1198,14 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
   const galleryItems = visibleJobs.flatMap((job) => layout === 'grid' && job.kind === 'image' && job.status === 'succeeded' && job.assets.length > 1
     ? job.assets.map((asset) => ({ key: 'asset-' + asset.id, job: { ...job, assets: [asset] } }))
     : [{ key: 'job-' + job.id, job }])
-  const canGenerate = !!prompt.trim() && busy === null && enough && withinToday &&
-    enoughReferences && (!check?.allowed || !!finalPrompt.trim())
+  const canGenerate = !!prompt.trim() && enough && withinToday && enoughReferences
 
-  const showPending = !!pending && !inBin && activeCollection === null && (kindFilter === 'all' || kindFilter === pending.kind) && !inFavorites
+  const shownPending = pending.filter((item) => !inBin && activeCollection === null && !inFavorites && (kindFilter === 'all' || kindFilter === item.kind))
   const tile = (j: Job, key: string, compact = false) => (
-    <Tile key={key} job={j} grid={layout === 'grid'} compact={compact} inBin={inBin} onTrash={moveAssetToBin} onDismiss={dismissJob} onRestore={(id) => restoreFromBin('assets', id)} onExtend={extendInNewScene} onAnimate={selectImage} onEdit={startEdit} onCrop={(job, asset) => setCropImage({ jobId: job.id, assetId: asset.id, url: asset.url })} editImageIds={editImages.map((item) => item.assetId)} collections={collections} activeCollection={activeCollection} onCollectionChange={changeCollectionAsset} onReuse={reusePrompt} onUpscale={upscale} upscaling={upscaling} selectedImageIds={images.map((item) => item.assetId)} onNewScene={(job) => newScene([job.id]).catch((err) => setError(err.message))}
-      onEditVideo={editVideo} editingVideoId={source?.mode === 'edit' ? source.job.id : null} onSaveFrame={saveFrame} savingFrame={savingFrame}
-      onFavorite={setFavorite} onRename={renameAsset} onUpscaleImage={upscaleImage} upscalingImage={upscalingImage} imageUpscale={me.imageUpscale} />
+    <Tile key={key} job={j} grid={layout === 'grid'} compact={compact} inBin={inBin} onTrash={moveAssetToBin} onDismiss={dismissJob} onRestore={(id) => restoreFromBin('assets', id)} onExtend={extendFrom} onAnimate={selectImage} onEdit={startEdit} onCrop={(job, asset) => setCropImage({ jobId: job.id, assetId: asset.id, url: asset.url })} editImageIds={editImages.map((item) => item.assetId)} collections={collections} activeCollection={activeCollection} onCollectionChange={changeCollectionAsset} onReuse={reusePrompt} onUpscale={upscale} upscaling={upscaling} selectedImageIds={images.map((item) => item.assetId)} onNewScene={(job) => newScene([job.id]).catch((err) => setError(err.message))}
+      onEditVideo={editVideo} editingVideoId={source?.mode === 'edit' ? source.job.id : null}
+      onFavorite={setFavorite} onRename={renameAsset} onUpscaleImage={upscaleImage} upscalingImage={upscalingImage} imageUpscale={me.imageUpscale}
+      onOpenVideo={openClip} />
   )
   // Batch view: the jobs from one press of Generate share a row, like Flow.
   const batches = visibleJobs.reduce<Job[][]>((groups, job) => {
@@ -1004,7 +1215,7 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
     return groups
   }, [])
   const galleryCards = [
-    ...(showPending ? Array.from({ length: layout === 'batch' ? 1 : pending.count }, (_, i) => <PendingTile key={'pending-' + i} prompt={pending.prompt} kind={pending.kind} count={layout === 'batch' ? pending.count : 1} />) : []),
+    ...shownPending.flatMap((item) => Array.from({ length: layout === 'batch' ? 1 : item.count }, (_, i) => <PendingTile key={`pending-${item.id}-${i}`} prompt={item.prompt} kind={item.kind} count={layout === 'batch' ? item.count : 1} />)),
     ...visibleCollections.map((item) => (
                     inBin ? <div key={item.id} className="scene-card bin-collection"><span>{item.name}</span>
                       <button className="btn sm secondary" onClick={() => restoreFromBin('collections', item.id)}>Restore collection</button>
@@ -1015,6 +1226,12 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
         : <BatchRow key={'batch-' + group[0].batchId} jobs={group} inBin={inBin} onReuse={reusePrompt}>{group.map((j) => tile(j, 'job-' + j.id, true))}</BatchRow>)
       : galleryItems.map(({ job: j, key }) => tile(j, key))),
   ]
+
+  // The open clip, from what's loaded; otherwise fetched (e.g. a refresh on its URL).
+  const findJob = (id: number) => jobs.find((item) => item.id === id) ?? favoriteJobs?.find((item) => item.id === id) ?? collectionMedia?.jobs.find((item) => item.id === id)
+  const clipJob = view.clipId != null ? findJob(view.clipId) ?? (fetchedClip?.id === view.clipId ? fetchedClip : null) : null
+  const clipRelated = clipJob ? jobs.filter((item) => item.kind === 'video' && item.sourceJobId === clipJob.id && item.id !== clipJob.id) : []
+  const clipSource = clipJob?.sourceJobId != null ? findJob(clipJob.sourceJobId) ?? null : null
 
   if (projectMissing) {
     return (
@@ -1042,7 +1259,7 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
         }} />}
       {!scene && (
         <div className="flow-toolbar">
-          {project && <input className="project-title" aria-label="Project name" maxLength={80} dir="auto"
+          {project && <input ref={titleInput} className="project-title" aria-label="Project name" maxLength={80} dir="auto"
             key={project.id + ':' + project.name} defaultValue={project.name} title="Rename project"
             onBlur={(event) => { const value = event.target.value; event.target.value = value.trim() || project.name; void renameProject(value) }}
             onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }} />}
@@ -1100,17 +1317,26 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
           </button>
         </nav>
       )}
-      <section className="media-area" aria-label={scene ? 'Scene workspace' : inBin ? 'Bin' : currentCollection?.name ?? 'Project results'}>
+      <section ref={mediaArea} className="media-area" aria-label={scene ? 'Scene workspace' : inBin ? 'Bin' : currentCollection?.name ?? 'Project results'}>
         {scene ? (
           <SceneBuilder
             scene={scene}
             jobs={jobs}
             onChange={updateScene}
             onClose={() => { setSource(null); loadScenes(); go({ filter: 'scenes' }) }}
+            onAllMedia={() => { setSource(null); loadScenes(); go({}) }}
             onDeleted={() => { setScenes((prev) => prev.filter((x) => x.id !== scene.id)); setSource(null); go({ filter: 'scenes' }) }}
             onExtend={extendFrom}
             extendingFrom={source?.mode === 'extend' ? source.job.id : null}
           />
+        ) : view.clipId != null ? (
+          clipJob ? <VideoViewer key={clipJob.id} job={clipJob} notice={clipNotice?.id === clipJob.id ? clipNotice.text : undefined}
+            related={clipRelated} source={clipSource} onOpen={openClip} onBack={() => go({})}
+            onTrim={trimClip} onContinueFrom={continueFromFrame} onExtend={extendFrom} onEditVideo={editVideo}
+            using={source?.job.id === clipJob.id && (source.mode === 'extend' || source.mode === 'edit') ? source.mode : null}
+            onUpscale={upscale} upscaling={upscaling} onFavorite={setFavorite} onReuse={reusePrompt} onSaveFrame={saveFrame} savingFrame={savingFrame === clipJob.id}
+            onNewScene={(job) => newScene([job.id]).catch((err) => setError(err.message))} onTrash={moveAssetToBin} />
+            : <div className="empty">Loading…</div>
         ) : sceneMissing ? (
           <div className="empty">{scenesLoaded ? 'This scene was deleted or isn’t in this project.' : 'Loading…'}</div>
         ) : mediaFilter === 'characters' ? (
@@ -1135,7 +1361,7 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
                 onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }} />
               <button className="btn sm secondary bin-action" onClick={() => moveCollectionToBin(currentCollection.id)}>Delete collection</button>
             </div>}
-            {collectionLoading || (inBin && bin === null) || (inFavorites && favoriteJobs === null) ? <div className="empty">Loading…</div> : (
+            {collectionLoading || (inBin && bin === null) ? <div className="empty">Loading…</div> : (
               galleryCards.length === 0 ? <div className="empty">
                 {search.trim() ? 'No matching results.' : inBin ? 'The Bin is empty.' : currentCollection ? 'No media in this collection yet.'
                   : inFavorites ? 'No favorites yet. Press ☆ on an image or video to keep it here.' : 'Your images and videos will appear here.'}
@@ -1152,79 +1378,61 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
               <span>New videos go into <b>{scene.name}</b>{source?.mode === 'extend' ? ', right after the clip they continue' : ', at the end'}.</span>
             </div>
           )}
-          {editImages.length > 0 && (
-            <div className="field">
-              <span>{editImages.length > 1 ? 'Reference images' : 'Image to edit'}</span>
-              {editImages.map((image, index) => (
-                <div className="source-chip" key={image.assetId}>
-                  <img src={image.url} alt="" />
-                  <span className="spacer">Image {index + 1}</span>
-                  <button className="icon-btn" disabled={busy !== null} aria-label={`Remove image ${index + 1}`}
-                    onClick={() => { setEditImages((previous) => previous.filter((item) => item.assetId !== image.assetId)); setCheck(null) }}>✕</button>
-                </div>
-              ))}
-              {editImages.length < 3 && <span className="small muted">Choose Edit / combine on more images to use them together.</span>}
-            </div>
-          )}
-          {source && (
-            <div className="source-chip">
-              {source.mode === 'animate' || !source.job.assets[0]?.mime.startsWith('video')
-                ? <img src={(source.job.assets.find((a) => a.id === source.assetId) ?? source.job.assets[0])?.url} alt="" />
-                : <video src={`${source.job.assets[0].url}#t=${source.mode === 'edit' ? 0.5 : Math.max(clipSeconds(source.job) - 0.2, 0)}`} muted preload="metadata" />}
-              <div className="col" style={{ flex: 1, minWidth: 0 }}>
-                <span className="strong small">{source.mode === 'extend' ? 'Extend · starts from the last frame' : source.mode === 'edit' ? `Edit this video · ${clock(clipSeconds(source.job))}` : 'Animate this image'}</span>
-                <span className="faint small one-line" dir="auto">{source.job.promptOriginal}</span>
-                <span className="faint small">{source.mode === 'extend' ? 'Write what happens next.' : source.mode === 'edit' ? 'Describe the change. Omni keeps the rest of the shot.' : 'Write how it should move.'}</span>
-              </div>
-              <button className="icon-btn" title="Don’t start from this" onClick={() => setSource(null)}>✕</button>
-            </div>
-          )}
-
-          {chosenCharacters.length > 0 && (
-            <div className="field">
-              <span>Characters</span>
-              {chosenCharacters.map((item) => (
-                <div className="source-chip" key={item.id}>
-                  {item.images[0] ? <img src={item.images[0].url} alt="" /> : <span className="character-blank" aria-hidden="true">☺</span>}
-                  <div className="col" style={{ flex: 1, minWidth: 0 }}>
-                    <span className="strong small" dir="auto">{item.name}</span>
-                    {kind === 'video' && item.voice && <span className="faint small one-line" dir="auto">Voice · {item.voice}</span>}
-                  </div>
-                  <button className="icon-btn" aria-label={`Remove ${item.name}`} onClick={() => toggleCharacter(item)}>✕</button>
-                </div>
-              ))}
-              <span className="small muted">
-                {kind === 'image' ? 'Their images go to the model as references, with their description.'
-                  : characterReferences || (images.length > 0 && imageMode === 'references') ? 'Their images go to the model as references (Omni or Veo 3.1 Quality), with their look and voice.'
-                  : 'Only their look and voice are added to the prompt, since this video starts from a picture or clip.'}
-              </span>
-            </div>
-          )}
-
-          {kind === 'video' && images.length > 0 && (
-            <div className="field">
-              <span>Selected images</span>
-              {images.map((item, index) => {
-                const role = imageRole(index)
-                return (
-                  <div className="source-chip" key={item.assetId}>
-                    <img src={item.url} alt="" />
-                    <span className="spacer">Image {index + 1}</span>
-                    <div className="seg role-seg" role="group" aria-label={`Use of image ${index + 1}`}>
-                      {(['start', 'end', 'ingredient'] as const).map((option) => (
-                        <button key={option} type="button" aria-pressed={role === option} className={role === option ? 'on' : ''}
-                          disabled={role !== option && !roleAllowed(option)} title={ROLE_HELP[option]}
-                          onClick={() => setImageRole(index, option)}>{ROLE_LABEL[option]}</button>
-                      ))}
+          {/* Everything the prompt uses, as one compact row of thumbnails, so the gallery stays visible. */}
+          {(editImages.length > 0 || source || chosenCharacters.length > 0 || (kind === 'video' && images.length > 0)) && (
+            <div className="attach">
+              <div className="attach-tray" role="list" aria-label="Used in this prompt">
+                {chosenCharacters.map((item) => (
+                  <div className="attach-card character" role="listitem" key={'c' + item.id} title={kind === 'video' && item.voice ? `Voice · ${item.voice}` : item.name}>
+                    <div className="attach-thumb">
+                      {item.images[0] ? <img src={item.images[0].url} alt="" /> : <span className="character-blank" aria-hidden="true">☺</span>}
+                      <button className="attach-remove" type="button" aria-label={`Remove ${item.name}`} onClick={() => toggleCharacter(item)}>✕</button>
                     </div>
-                    <button className="icon-btn" type="button" aria-label={`Remove image ${index + 1}`}
-                      onClick={() => setImages((previous) => previous.filter((image) => image.assetId !== item.assetId))}>✕</button>
+                    <span className="attach-label" dir="auto">☺ {item.name}</span>
                   </div>
-                )
-              })}
-              {imageMode === 'separate' && <span className="small muted">{images.length > 1 ? `Each image starts its own video (${images.length} videos). Mark one image End to make one video between two images, or use them all as Ingredients in one video.` : 'The video starts on this image. Add a second image to end on it, or use images as Ingredients.'}</span>}
-              {usesFrames && <span className="small muted">{images.length === 2 ? 'The video starts on the Start image and ends on the End image.' : 'Choose a second image for where the video ends.'} {typeof caps?.endFrameDuration === 'object' ? `Up to ${caps.endFrameDuration.max} seconds on this model.` : `Omni 1.2, Veo 3.1 Quality or Fast. ${caps?.endFrameDuration ?? 8} seconds on Veo.`}</span>}
-              {usesReferences && <span className="small muted">{characterImages ? 'Up to 3 reference images, counting the characters’ images.' : 'Select 2–3 reference images.'}{typeof referenceDuration === 'number' ? ` This model generates an ${referenceDuration}-second clip.` : ''}</span>}
+                ))}
+                {source && (
+                  <div className="attach-card" role="listitem" title={source.job.promptOriginal}>
+                    <div className="attach-thumb">
+                      {source.mode === 'animate' || !source.job.assets[0]?.mime.startsWith('video')
+                        ? <img src={(source.job.assets.find((a) => a.id === source.assetId) ?? source.job.assets[0])?.url} alt="" />
+                        : <video src={`${source.job.assets[0].url}#t=${source.mode === 'edit' ? 0.5 : Math.max(clipSeconds(source.job) - 0.2, 0)}`} muted preload="metadata" />}
+                      <button className="attach-remove" type="button" aria-label="Don’t start from this" onClick={() => setSource(null)}>✕</button>
+                    </div>
+                    <span className="attach-label">{source.mode === 'extend' ? '↪ Extend' : source.mode === 'edit' ? `✎ Edit · ${clock(clipSeconds(source.job))}` : 'Start'}</span>
+                  </div>
+                )}
+                {editImages.map((image, index) => (
+                  <div className="attach-card" role="listitem" key={'e' + image.assetId}>
+                    <div className="attach-thumb">
+                      <img src={image.url} alt="" />
+                      <span className="attach-index">{index + 1}</span>
+                      <button className="attach-remove" type="button" aria-label={`Remove image ${index + 1}`}
+                        onClick={() => { setEditImages((previous) => previous.filter((item) => item.assetId !== image.assetId)); setCheck(null) }}>✕</button>
+                    </div>
+                    <span className="attach-label">{editImages.length > 1 ? `Image ${index + 1}` : 'Edit'}</span>
+                  </div>
+                ))}
+                {kind === 'video' && images.map((item, index) => {
+                  const role = imageRole(index)
+                  return (
+                    <div className={`attach-card role-${role}`} role="listitem" key={'i' + item.assetId}>
+                      <div className="attach-thumb">
+                        <img src={item.url} alt="" />
+                        <span className="attach-index">{index + 1}</span>
+                        <button className="attach-remove" type="button" aria-label={`Remove image ${index + 1}`} onClick={() => removeImage(item.assetId)}>✕</button>
+                      </div>
+                      <select className="attach-role" aria-label={`Use of image ${index + 1}`} value={role} title={ROLE_HELP[role]}
+                        onChange={(event) => setImageRole(index, event.target.value as ImageRole)}>
+                        {(['start', 'end', 'ingredient'] as const).map((option) => (
+                          <option key={option} value={option} disabled={option !== role && !roleAllowed(option)}>{ROLE_LABEL[option]}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )
+                })}
+              </div>
+              <span className="attach-hint small muted">{attachHint}</span>
             </div>
           )}
 
@@ -1267,7 +1475,7 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
             <textarea
               ref={promptBox}
               dir="auto"
-              disabled={busy !== null}
+              rows={1}
               placeholder={editImages.length > 1 ? 'How should these images be combined? · عايز تجمع الصور إزاي؟' : editImages.length === 1 ? 'What should change? · عايز تعدّل إيه في الصورة؟' : source?.mode === 'extend' ? 'What happens next? · إيه اللي يحصل بعد كده؟' : source?.mode === 'edit' ? 'Describe how to edit this video · عايز تعدّل إيه في الفيديو؟' : 'What do you want to create? · اكتب اللي عايز تعمله'}
               value={prompt}
               onChange={(e) => { setPrompt(e.target.value); setCheck(null); findMention(e.target) }}
@@ -1355,22 +1563,61 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
                 <span className="faint small">Each one is charged.</span>
               </div>
             )}
+            {openSetting === 'character' && (
+              <div className="setting-pop pick-pop" role="dialog" aria-label="Characters">
+                <div className="setting-pop-head"><span className="setting-label">Characters · الشخصيات</span>
+                  <span className="faint small">Up to 3 · look{kind === 'video' ? ' and voice' : ''} stay the same</span></div>
+                <div className="pick-grid">
+                  {characters.map((item) => {
+                    const on = promptCharacters.includes(item.id)
+                    return (
+                      <button key={item.id} type="button" className={`pick-character${on ? ' on' : ''}`} aria-pressed={on} onClick={() => toggleCharacter(item)}>
+                        <span className="pick-avatar">{item.images[0] ? <img src={item.images[0].url} alt="" /> : '☺'}{on && <i aria-hidden="true">✓</i>}</span>
+                        <b dir="auto">{item.name}</b>
+                      </button>
+                    )
+                  })}
+                  <button type="button" className="pick-character pick-new" onClick={() => { setOpenSetting(null); setEditingCharacter('new') }}>
+                    <span className="pick-avatar">＋</span><b>New</b>
+                  </button>
+                </div>
+              </div>
+            )}
+            {LOOK_NAMES.map((name) => openSetting === name && (
+              <div key={name} className="setting-pop pick-pop" role="dialog" aria-label={LOOKS[name].title}>
+                <div className="setting-pop-head"><span className="setting-label">{name === 'camera' && kind === 'image' ? 'Shot' : LOOKS[name].title}</span>
+                  {looks[name] && <button type="button" className="link-btn small" onClick={() => setLook(name, undefined)}>Clear</button>}</div>
+                <div className="pick-grid looks">
+                  {LOOKS[name].options(kind).map((option) => {
+                    const on = looks[name] === option.id
+                    return (
+                      <button key={option.id} type="button" className={`pick-look${on ? ' on' : ''}`} aria-pressed={on} title={option.text} aria-label={`${option.label} · ${option.ar}`}
+                        onClick={() => setLook(name, on ? undefined : option.id)}>
+                        <span className="pick-look-art" style={option.swatch ? { background: option.swatch } : undefined} aria-hidden="true">{option.swatch ? '' : option.icon}</span>
+                        <span className="pick-look-copy"><b>{option.label}</b><span className="faint" dir="rtl">{option.ar}</span></span>
+                      </button>
+                    )
+                  })}
+                </div>
+                <span className="faint small">Added to your prompt when you press Generate.</span>
+              </div>
+            ))}
             <div className="flow-composer-actions">
               <button className="icon-btn" type="button" title="Add media to prompt" aria-label="Add media to prompt"
-                disabled={busy !== null} onClick={openLibrary}><span aria-hidden="true">+</span></button>
+                onClick={openLibrary}><span aria-hidden="true">+</span></button>
               <div className="kind-seg" role="group" aria-label="Make a video or an image">
-                <button type="button" className={kind === 'video' ? 'on' : ''} aria-pressed={kind === 'video'} disabled={busy !== null}
+                <button type="button" className={kind === 'video' ? 'on' : ''} aria-pressed={kind === 'video'}
                   onClick={() => { switchKind('video'); setOpenSetting(null) }}>Video</button>
-                <button type="button" className={kind === 'image' ? 'on' : ''} aria-pressed={kind === 'image'} disabled={busy !== null}
+                <button type="button" className={kind === 'image' ? 'on' : ''} aria-pressed={kind === 'image'}
                   onClick={() => { switchKind('image'); setOpenSetting(null) }}>Image</button>
               </div>
               <button type="button" className={`setting-chip${openSetting === 'model' ? ' open' : ''}`} data-setting="model"
-                aria-expanded={openSetting === 'model'} disabled={busy !== null} onClick={() => toggleSetting('model')}>
+                aria-expanded={openSetting === 'model'} onClick={() => toggleSetting('model')}>
                 <span className="setting-chip-text">{modelLabel}</span><span aria-hidden="true">⌄</span>
               </button>
               {showFormat && (
                 <button type="button" className={`setting-chip${openSetting === 'format' ? ' open' : ''}`} data-setting="format"
-                  aria-expanded={openSetting === 'format'} aria-label={`Format: ${formatLabel}`} disabled={busy !== null} onClick={() => toggleSetting('format')}>
+                  aria-expanded={openSetting === 'format'} aria-label={`Format: ${formatLabel}`} onClick={() => toggleSetting('format')}>
                   <span className="setting-chip-text">{formatLabel}</span><span aria-hidden="true">⌄</span>
                 </button>
               )}
@@ -1378,12 +1625,12 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
               {showCount && (
                 <button type="button" className={`setting-chip${openSetting === 'count' ? ' open' : ''}`} data-setting="count"
                   aria-expanded={openSetting === 'count'} aria-label={`${countValue} ${kind === 'video' ? 'video' : 'image'}${countValue > 1 ? 's' : ''}`}
-                  disabled={busy !== null} onClick={() => toggleSetting('count')}>×{countValue}</button>
+                  onClick={() => toggleSetting('count')}>×{countValue}</button>
               )}
               <button className="flow-generate" aria-label={cost == null ? 'Generate' : `Generate, about ${fmt(cost)} credits`} title="Generate (Ctrl+Enter)"
                 disabled={!canGenerate} onClick={() => generate()}>
                 <span className="num">{cost == null ? '…' : `≈ ${fmt(cost)}`}</span>
-                <span className="flow-generate-arrow" aria-hidden="true">{busy === 'generate' ? <span className="flow-spinner" /> : '→'}</span>
+                <span className="flow-generate-arrow" aria-hidden="true">{submitting ? <span className="flow-spinner" /> : '→'}</span>
               </button>
             </div>
             <div className="flow-credit-line small num">
@@ -1391,13 +1638,26 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
                 <input type="checkbox" checked={keepPrompt} onChange={(event) => setKeepPrompt(event.target.checked)} />
                 Keep prompt
               </label>
-              {characters.length > 0 && (
-                <select className="collection-add composer-characters" aria-label="Add a character to the prompt" value="" disabled={busy !== null}
-                  onChange={(event) => { const item = characters.find((c) => c.id === Number(event.target.value)); if (item) toggleCharacter(item) }}>
-                  <option value="">☺ Character</option>
-                  {characters.filter((item) => !promptCharacters.includes(item.id)).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                </select>
-              )}
+              <div className="quick-picks" role="group" aria-label="Quick picks">
+                <button type="button" className={`setting-chip pick-chip${openSetting === 'character' ? ' open' : ''}${chosenCharacters.length ? ' set' : ''}`} data-setting="character"
+                  aria-expanded={openSetting === 'character'} onClick={() => toggleSetting('character')} title="Add one of your characters">
+                  {chosenCharacters.length ? (
+                    <span className="pick-faces" aria-hidden="true">{chosenCharacters.map((item) => item.images[0] ? <img key={item.id} src={item.images[0].url} alt="" /> : <span key={item.id}>☺</span>)}</span>
+                  ) : <span aria-hidden="true">☺</span>}
+                  <span className="setting-chip-text">{chosenCharacters.length === 1 ? chosenCharacters[0].name : chosenCharacters.length ? `${chosenCharacters.length} characters` : 'Character'}</span>
+                </button>
+                {LOOK_NAMES.map((name) => {
+                  const chosen = lookOption(name, looks[name], kind)
+                  const title = name === 'camera' && kind === 'image' ? 'Shot' : LOOKS[name].title
+                  return (
+                    <button key={name} type="button" className={`setting-chip pick-chip${openSetting === name ? ' open' : ''}${chosen ? ' set' : ''}`} data-setting={name}
+                      aria-expanded={openSetting === name} onClick={() => toggleSetting(name)} aria-label={chosen ? `${title}: ${chosen.label}` : title}>
+                      {chosen?.swatch ? <span className="pick-swatch" style={{ background: chosen.swatch }} aria-hidden="true" /> : <span aria-hidden="true">{chosen?.icon ?? LOOKS[name].icon}</span>}
+                      <span className="setting-chip-text">{chosen ? chosen.label : title}</span>
+                    </button>
+                  )
+                })}
+              </div>
               <span>{left != null ? `${fmt(left)} left today` : `${fmt(me.balance)} left`}</span>
               {isArabic(prompt) && <span>Arabic · translated word for word</span>}
               <span className="flow-disclaimer">AI can make mistakes</span>
@@ -1486,13 +1746,12 @@ type TileProps = {
   compact?: boolean
   onEditVideo: (job: Job) => void
   editingVideoId: number | null
-  onSaveFrame: (job: Job, seconds: number) => void
-  savingFrame: number | null
   onFavorite: Favorite
   onRename: Rename
-  onUpscaleImage: (assetId: number, size: '2K' | '4K') => void
+  onUpscaleImage: (assetId: number, size: ImageUpscaleSize) => void
   upscalingImage: number | null
-  imageUpscale: { size: '2K' | '4K'; credits: number }[]
+  imageUpscale: { size: ImageUpscaleSize; credits: number }[]
+  onOpenVideo: (job: Job) => void
 }
 
 // Names an image or video so it can be mentioned in a prompt with @.
@@ -1521,12 +1780,34 @@ function NameButton({ asset, onRename }: { asset: Job['assets'][number]; onRenam
   )
 }
 
-function FavoriteButton({ asset, onFavorite }: { asset: Job['assets'][number]; onFavorite: Favorite }) {
+function FavoriteButton({ asset, onFavorite, iconOnly = false }: { asset: Job['assets'][number]; onFavorite: Favorite; iconOnly?: boolean }) {
+  const label = asset.favorite ? 'Remove from Favorites' : 'Add to Favorites'
   return (
-    <button className={`btn sm secondary favorite-btn${asset.favorite ? ' on' : ''}`} aria-pressed={asset.favorite}
-      title={asset.favorite ? 'Remove from Favorites' : 'Add to Favorites'} onClick={() => onFavorite(asset.id, !asset.favorite)}>
-      {asset.favorite ? '★ Favorite' : '☆ Favorite'}
+    <button className={`btn sm secondary favorite-btn${asset.favorite ? ' on' : ''}${iconOnly ? ' icon-only' : ''}`} aria-pressed={asset.favorite}
+      title={label} aria-label={iconOnly ? label : undefined} onClick={() => onFavorite(asset.id, !asset.favorite)}>
+      {iconOnly ? (asset.favorite ? '★' : '☆') : asset.favorite ? '★ Favorite' : '☆ Favorite'}
     </button>
+  )
+}
+
+// "⋯": the less used actions of a card in a small menu; it closes on a click outside or Esc.
+function MoreMenu({ children }: { children: ReactNode }) {
+  const menu = useRef<HTMLDetailsElement>(null)
+  useEffect(() => {
+    const close = (event: Event) => {
+      const element = menu.current
+      if (!element?.open) return
+      if (event instanceof globalThis.KeyboardEvent ? event.key === 'Escape' : !element.contains(event.target as Node)) element.open = false
+    }
+    document.addEventListener('mousedown', close)
+    document.addEventListener('keydown', close)
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', close) }
+  }, [])
+  return (
+    <details className="more-menu" ref={menu}>
+      <summary className="btn sm secondary" aria-label="More actions" title="More actions">⋯</summary>
+      <div className="more-pop">{children}</div>
+    </details>
   )
 }
 
@@ -1572,7 +1853,7 @@ function PendingTile({ prompt, kind, count }: { prompt: string; kind: Kind; coun
   )
 }
 
-function Tile({ job, grid, inBin, onTrash, onDismiss, onRestore, onExtend, onAnimate, onEdit, onCrop, editImageIds, collections, activeCollection, onCollectionChange, onReuse, onUpscale, upscaling, selectedImageIds, onNewScene, compact = false, onEditVideo, editingVideoId, onSaveFrame, savingFrame, onFavorite, onRename, onUpscaleImage, upscalingImage, imageUpscale }: TileProps) {
+function Tile({ job, grid, inBin, onTrash, onDismiss, onRestore, onExtend, onAnimate, onEdit, onCrop, editImageIds, collections, activeCollection, onCollectionChange, onReuse, onUpscale, upscaling, selectedImageIds, onNewScene, compact = false, onEditVideo, editingVideoId, onFavorite, onRename, onUpscaleImage, upscalingImage, imageUpscale, onOpenVideo }: TileProps) {
   const [now, setNow] = useState(() => Date.now())
   const videoRef = useRef<HTMLVideoElement>(null)
   const running = job.status === 'running' || job.status === 'reserved'
@@ -1581,8 +1862,8 @@ function Tile({ job, grid, inBin, onTrash, onDismiss, onRestore, onExtend, onAni
     const t = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(t)
   }, [running])
-  const label = job.kind === 'video' ? `${job.params.durationSeconds}s · ${job.params.resolution} · ${job.params.aspectRatio}`
-    : job.params.upscale ? `Upscaled ${job.params.upscale.startsWith('x') ? job.params.upscale.replace('x', '×') : `to ${job.params.upscale}`}`
+  const label = job.kind === 'video' ? (job.params.extendedSeconds ? `↪ Extended · ${clock(clipSeconds(job))} · ${job.params.resolution}` : `${job.params.durationSeconds}s · ${job.params.resolution} · ${job.params.aspectRatio}`)
+    : job.params.upscale ? `Upscaled ${job.params.upscale.startsWith('x') ? upscaleLabel(job.params.upscale) : `to ${upscaleLabel(job.params.upscale)}`}`
     : `${job.assets.length || job.params.count} image${(job.assets.length || job.params.count) > 1 ? 's' : ''}`
   const safety = job.error?.startsWith('safety')
 
@@ -1601,31 +1882,59 @@ function Tile({ job, grid, inBin, onTrash, onDismiss, onRestore, onExtend, onAni
 
   function imageActions(asset: Job['assets'][number]) {
     if (inBin) return <div className="image-actions"><button className="btn sm secondary" onClick={() => onRestore(asset.id)}>Restore image</button></div>
+    const more = <>
+      <NameButton asset={asset} onRename={onRename} />
+      <button className="btn sm secondary" onClick={() => onCrop(job, asset)}>Crop</button>
+      <select className="collection-add" aria-label="Upscale this image" value="" disabled={upscalingImage !== null}
+        onChange={(event) => { if (event.target.value) onUpscaleImage(asset.id, event.target.value as ImageUpscaleSize) }}>
+        <option value="">{upscalingImage === asset.id ? 'Starting upscale…' : 'Upscale'}</option>
+        <optgroup label="Fast">
+          {imageUpscale.filter(({ size }) => !size.endsWith('-pro')).map(({ size, credits }) => <option key={size} value={size}>To {upscaleLabel(size)} · {credits} cr</option>)}
+        </optgroup>
+        <optgroup label="Pro · finer detail">
+          {imageUpscale.filter(({ size }) => size.endsWith('-pro')).map(({ size, credits }) => <option key={size} value={size}>To {upscaleLabel(size)} · {credits} cr</option>)}
+        </optgroup>
+      </select>
+      <a className="btn sm secondary" href={asset.url} download>Download</a>
+      {collectionActions(asset.id)}
+      <button className="btn sm secondary bin-action" onClick={() => onTrash(asset.id)}>Delete image</button>
+    </>
     return (
       <div className="image-actions">
-        <FavoriteButton asset={asset} onFavorite={onFavorite} />
-        <NameButton asset={asset} onRename={onRename} />
+        <FavoriteButton asset={asset} onFavorite={onFavorite} iconOnly={!grid} />
         <button className="btn sm secondary" aria-pressed={selectedImageIds.includes(asset.id)} onClick={() => onAnimate(job, asset.id)}>
           {selectedImageIds.includes(asset.id) ? '✓ Selected' : '＋ Use in video'}
         </button>
         <button className="btn sm secondary" aria-pressed={editImageIds.includes(asset.id)} onClick={() => onEdit(job, asset.id)}>
           {editImageIds.includes(asset.id) ? '✓ In prompt' : 'Edit / combine'}
         </button>
-        <button className="btn sm secondary" onClick={() => onCrop(job, asset)}>Crop</button>
-        <select className="collection-add" aria-label="Upscale this image" value="" disabled={upscalingImage !== null}
-          onChange={(event) => { if (event.target.value) onUpscaleImage(asset.id, event.target.value as '2K' | '4K') }}>
-          <option value="">{upscalingImage === asset.id ? 'Upscaling…' : 'Upscale'}</option>
-          {imageUpscale.map(({ size, credits }) => <option key={size} value={size}>To {size} · {credits} cr</option>)}
-        </select>
-        <a className="btn sm secondary" href={asset.url} download>Download</a>
-        {collectionActions(asset.id)}
-        <button className="btn sm secondary bin-action" onClick={() => onTrash(asset.id)}>Delete image</button>
+        {grid ? more : <MoreMenu>{more}</MoreMenu>}
       </div>
     )
   }
 
   const ready = job.status === 'succeeded' && job.assets.length > 0
   const videoReady = ready && job.kind === 'video'
+  // Less used clip actions: in the grid they show on hover; in batch rows they sit behind "⋯".
+  const videoMore = videoReady ? <>
+    {!!job.upscaleOptions?.length && (
+      <select className="collection-add" aria-label="Upscale this video" value="" disabled={upscaling !== null}
+        onChange={(event) => {
+          const option = job.upscaleOptions?.find((item) => item.resolution === event.target.value)
+          if (option) onUpscale(job, option.resolution)
+        }}>
+        <option value="">{upscaling === job.id ? 'Starting upscale…' : 'Upscale'}</option>
+        {job.upscaleOptions.map(({ resolution, credits }) => (
+          <option key={resolution} value={resolution}>To {resolution === '4k' ? '4K' : resolution} · {credits} cr</option>
+        ))}
+      </select>
+    )}
+    {grid && <FavoriteButton asset={job.assets[0]} onFavorite={onFavorite} />}
+    <NameButton asset={job.assets[0]} onRename={onRename} />
+    <a className="btn sm secondary" href={job.assets[0].url} download>Download</a>
+    {collectionActions(job.assets[0].id)}
+    <button className="btn sm ghost bin-action" onClick={() => onTrash(job.assets[0].id)}>Delete</button>
+  </> : null
 
   return (
     <div className={`tile ${running ? 'running' : ''} ${job.status === 'failed' ? 'failed' : ''}${job.modelKey === 'upload' ? ' uploaded' : ''}${ready && !inBin ? ' ready' : ''}`}>
@@ -1634,7 +1943,7 @@ function Tile({ job, grid, inBin, onTrash, onDismiss, onRestore, onExtend, onAni
           <div className="col" style={{ alignItems: 'center', gap: 10 }}>
             <span className="strong">Generating · {Math.max(0, Math.round((now - job.createdAt) / 1000))}s</span>
             <div className="progress"><i /></div>
-            <span className="faint small">Video usually takes 1–2 minutes · {job.estimatedCost} credits reserved</span>
+            <span className="faint small">{job.kind === 'video' ? 'Video usually takes 1–2 minutes' : 'Images take a few seconds'} · {job.estimatedCost} credits reserved</span>
           </div>
         )}
         {job.status === 'failed' && (
@@ -1646,23 +1955,36 @@ function Tile({ job, grid, inBin, onTrash, onDismiss, onRestore, onExtend, onAni
         )}
         {job.status === 'succeeded' && job.kind === 'video' && job.assets[0] && (
           job.assets[0].mime.startsWith('video')
-            ? <>
-              <video ref={videoRef} src={job.assets[0].url} controls preload="metadata" playsInline />
-              {!inBin && (
-                <button className="frame-btn" title="Save the frame you’re on as an image" disabled={savingFrame !== null}
-                  onClick={() => onSaveFrame(job, videoRef.current?.currentTime ?? 0)}>
-                  {savingFrame === job.id ? 'Saving…' : '⧉ Save frame'}
-                </button>
-              )}
-            </>
-            : <img src={job.assets[0].url} alt="" />
+            ? (
+              // Clicking opens the clip's page (extend, edit, trim…); hovering plays a silent preview.
+              // The poster is a still kept by the browser, so going back to a view shows the clip at once;
+              // the video itself loads only when it's previewed or opened.
+              <button className="video-open" type="button" aria-label="Open this clip to extend, edit or trim it" disabled={inBin}
+                draggable={!inBin} onDragStart={(event) => { event.dataTransfer.setData(ASSET_DRAG_TYPE, JSON.stringify({ jobId: job.id, assetId: job.assets[0].id })); event.dataTransfer.effectAllowed = 'copy' }}
+                onClick={() => onOpenVideo(job)}
+                onMouseEnter={() => { const element = videoRef.current; if (element) { element.muted = true; void element.play().catch(() => {}) } }}
+                onMouseLeave={() => { const element = videoRef.current; if (element) { element.pause(); element.currentTime = 0 } }}>
+                <video ref={videoRef} src={job.assets[0].url} poster={posterUrl(job.assets[0].url)} muted loop preload="none" playsInline />
+                <span className="video-badge num" aria-hidden="true">▶ {clock(clipSeconds(job))}</span>
+                {job.params.extendedSeconds ? <span className="video-badge extended" aria-hidden="true">↪ Extended</span> : null}
+              </button>
+            )
+            : (
+              <button className="video-open" type="button" aria-label="Open this clip" disabled={inBin} onClick={() => onOpenVideo(job)}>
+                <img src={job.assets[0].url} alt="" />
+                <span className="video-badge num" aria-hidden="true">▶ {clock(clipSeconds(job))}</span>
+              </button>
+            )
         )}
 
         {job.status === 'succeeded' && job.kind === 'image' && (
           <div className={`imgs ${job.assets.length === 1 ? 'one' : ''}`}>
             {job.assets.map((a) => (
               <div key={a.id} className="img-cell">
-                <a className="image-preview" href={a.url} target="_blank" rel="noreferrer" aria-label="Open image preview"><img src={a.url} alt="" /></a>
+                <a className="image-preview" href={a.url} target="_blank" rel="noreferrer" aria-label="Open image preview" draggable={!inBin}
+                  onDragStart={(event) => { event.dataTransfer.setData(ASSET_DRAG_TYPE, JSON.stringify({ jobId: job.id, assetId: a.id })); event.dataTransfer.effectAllowed = 'copy' }}>
+                  <img src={a.url} alt="" draggable={false} loading="lazy" decoding="async" />
+                </a>
                 {!grid && imageActions(a)}
               </div>
             ))}
@@ -1692,30 +2014,18 @@ function Tile({ job, grid, inBin, onTrash, onDismiss, onRestore, onExtend, onAni
             {/* What you do next with a clip, most used first. */}
             <div className="row tile-actions">
               <button className="btn sm extend-action" title="Make the next shot, starting from this clip's last frame" onClick={() => onExtend(job)}>＋ Extend</button>
+              <button className="btn sm secondary" title="Open the clip: extend from any frame, edit, trim, upscale" onClick={() => onOpenVideo(job)}>⤢ Open</button>
               <button className="btn sm secondary" aria-pressed={editingVideoId === job.id} title="Change this video with a prompt (Omni)" onClick={() => onEditVideo(job)}>
                 {editingVideoId === job.id ? '✓ Editing' : 'Edit video'}
               </button>
               <button className="btn sm secondary" title="Start a scene timeline with this clip" onClick={() => onNewScene(job)}>Add to scene</button>
               {!compact && job.promptOriginal && <button className="btn sm secondary" onClick={() => onReuse(job)}>Reuse prompt</button>}
+              {!grid && <>
+                <FavoriteButton asset={job.assets[0]} onFavorite={onFavorite} iconOnly />
+                <MoreMenu>{videoMore}</MoreMenu>
+              </>}
             </div>
-            <div className="row tile-actions tile-more">
-              {!!job.upscaleOptions?.length && (
-                <select className="collection-add" aria-label="Upscale this video" value="" disabled={upscaling !== null}
-                  onChange={(event) => {
-                    const option = job.upscaleOptions?.find((item) => item.resolution === event.target.value)
-                    if (option) onUpscale(job, option.resolution)
-                  }}>
-                  <option value="">{upscaling === job.id ? 'Starting upscale…' : 'Upscale'}</option>
-                  {job.upscaleOptions.map(({ resolution, credits }) => (
-                    <option key={resolution} value={resolution}>To {resolution === '4k' ? '4K' : resolution} · {credits} cr</option>
-                  ))}
-                </select>
-              )}
-              <FavoriteButton asset={job.assets[0]} onFavorite={onFavorite} />
-              <NameButton asset={job.assets[0]} onRename={onRename} />
-              {collectionActions(job.assets[0].id)}
-              <button className="btn sm ghost bin-action" onClick={() => onTrash(job.assets[0].id)}>Delete</button>
-            </div>
+            {grid && <div className="row tile-actions tile-more">{videoMore}</div>}
           </>
         )}
       </div>
