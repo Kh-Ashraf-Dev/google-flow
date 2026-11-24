@@ -1,12 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { api } from '../api.ts'
 
-const DEMO = [
-  ['Saif Sabry', 'saif@awqaf.demo', 'Employee · Media'],
-  ['Mona Nabil', 'mona@awqaf.demo', 'Employee · Social'],
-  ['Omar Khaled', 'omar@awqaf.demo', 'Admin · Media'],
-]
-
 export function Login({ onDone }: { onDone: () => Promise<void> }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -51,20 +45,6 @@ export function Login({ onDone }: { onDone: () => Promise<void> }) {
         </label>
         {error && <div className="error-text">{error}</div>}
         <button className="btn" disabled={busy || !email || !password}>Sign in</button>
-        <div className="col">
-          <span className="label">Demo accounts · password demo1234</span>
-          <div className="demo-accounts">
-            {DEMO.map(([name, mail, role]) => (
-              <button type="button" key={mail} onClick={() => { setEmail(mail); setPassword('demo1234') }}>
-                <div className="avatar">{name.split(' ').map((p) => p[0]).join('')}</div>
-                <div className="col" style={{ gap: 0 }}>
-                  <span className="strong">{name}</span>
-                  <span className="faint small">{role}</span>
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
       </form>
     </div>
   )

@@ -98,7 +98,9 @@ async function type(selector, text) {
 }
 async function signIn(name) {
   await page.goto(BASE, { waitUntil: 'networkidle0' })
-  await click(`::-p-xpath(//div[@class="demo-accounts"]//button[contains(., "${name}")])`)
+  const email = `${name.split(' ')[0].toLowerCase()}@awqaf.demo`
+  await type('input[type="email"]', email)
+  await type('input[type="password"]', 'demo1234')
   await click(btn('Sign in'))
   await page.waitForSelector('.topbar', { timeout: 15000 })
   await sleep(800)
