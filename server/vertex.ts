@@ -158,8 +158,9 @@ export async function generateVeo(model: string, prompt: string, p: VeoParams, s
       resolution: p.resolution,
       ...(p.aspectRatio === 'auto' ? {} : { aspectRatio: p.aspectRatio }),
       generateAudio: true,
-      // Egypt is in MENA, where Veo only allows adults.
-      personGeneration: 'allow_adult',
+      // allow_all lets scenes with children through: with allow_adult, Veo refused every start
+      // image that showed a child (tested 2026-11-25). VEO_PERSON_GENERATION=allow_adult undoes it.
+      personGeneration: process.env.VEO_PERSON_GENERATION ?? 'allow_all',
       ...(startFrame ? { resizeMode: 'crop' } : {}),
     },
   })
