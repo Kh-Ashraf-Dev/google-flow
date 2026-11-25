@@ -13,6 +13,8 @@ export type VideoCaps = {
   endFrameDuration?: number | { max: number }
   // Resolutions that only come in the longest length (Veo: 1080p and 4K are 8 s).
   fullLengthOnly: Resolution[]
+  // Set for models that don't run on Vertex.
+  provider?: 'fal.ai'
 }
 
 const VEO_SECONDS = { min: 4, max: 8, step: 2, maxFromSource: 8 }
@@ -36,6 +38,15 @@ const VIDEO_CAPS: Record<string, VideoCaps> = {
   'veo-3.1': { resolutions: ['720p', '1080p', '4k'], seconds: VEO_SECONDS, autoAspect: false, fullLengthOnly: ['1080p', '4k'], referenceDuration: 8, endFrameDuration: 8 },
   'veo-3.1-fast': { resolutions: ['720p', '1080p'], seconds: VEO_SECONDS, autoAspect: false, fullLengthOnly: ['1080p'], endFrameDuration: 8 },
   'veo-3.1-lite': { resolutions: ['720p', '1080p'], seconds: VEO_SECONDS, autoAspect: false, fullLengthOnly: ['1080p'] },
+  // fal.ai. Kling takes 3 to 15 seconds and an end image; Wan makes 5 or 10 seconds.
+  'kling-3-standard': {
+    resolutions: ['720p'], seconds: { min: 3, max: 15, step: 1, maxFromSource: 15 },
+    autoAspect: false, fullLengthOnly: [], endFrameDuration: { max: 15 }, provider: 'fal.ai',
+  },
+  'wan-2.5': {
+    resolutions: ['720p', '1080p'], seconds: { min: 5, max: 10, step: 5, maxFromSource: 10 },
+    autoAspect: false, fullLengthOnly: [], provider: 'fal.ai',
+  },
 }
 
 export const videoCaps = (modelKey: string) => VIDEO_CAPS[modelKey]
@@ -54,7 +65,18 @@ const VIDEO_RATES: Record<string, Partial<Record<Resolution, { usd: number; cred
   'veo-3.1-lite': { '720p': { usd: 0.05, credits: 1 }, '1080p': { usd: 0.08, credits: 1 } },
   'veo-3.1-fast': { '720p': { usd: 0.1, credits: 2 }, '1080p': { usd: 0.12, credits: 2 } },
   'veo-3.1': { '720p': { usd: 0.4, credits: 5 }, '1080p': { usd: 0.4, credits: 5 }, '4k': { usd: 0.6, credits: 8 } },
+  'kling-3-standard': { '720p': { usd: 0.084, credits: 2 } },
+  'wan-2.5': { '720p': { usd: 0.1, credits: 2 }, '1080p': { usd: 0.15, credits: 2 } },
 }
+
+// Listed in the model picker but not usable until the client agrees to them. They have no
+// pricing rule, so the server rejects them like any unknown model.
+export const UPCOMING_MODELS = [
+  { model_key: 'kling-3-pro', label: 'Kling 3 Pro', kind: 'video', credits_per_second: 2, provider: 'fal.ai' },
+  { model_key: 'kling-3-pro-audio', label: 'Kling 3 Pro with audio', kind: 'video', credits_per_second: 3, provider: 'fal.ai' },
+  { model_key: 'seedance-2-fast', label: 'Seedance 2.0 Fast', kind: 'video', credits_per_second: 3, provider: 'fal.ai' },
+  { model_key: 'seedance-2', label: 'Seedance 2.0', kind: 'video', credits_per_second: 4, provider: 'fal.ai' },
+] as const
 
 // The 720p row, shown in the model picker and stored in pricing_rules.
 export const videoRate720 = (modelKey: string) => VIDEO_RATES[modelKey]?.['720p']

@@ -2,6 +2,7 @@
 // later means a second implementation of this file, not changes across the app.
 import { config } from './config.ts'
 import { generateContent, generateOmni, generateVeo } from './vertex.ts'
+import { generateFal } from './fal.ts'
 
 export type PolicyRuleInput = { id: number; name: string; description: string; action: 'block' | 'review' }
 
@@ -20,8 +21,10 @@ export type ImageResult = { mime: string; bytes: Buffer }[]
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-function reviewInstruction(rules: PolicyRuleInput[], editImage: boolean) {
-  return `You check prompts for a video and image studio used by the Egyptian Ministry of Awqaf. You do not rewrite or improve them.
+// The prompt goes to the model exactly as the user wrote it, like Google Flow: no translation,
+// so spoken lines keep their words and their Egyptian dialect. This call only checks the rules.
+function reviewInstruction(rules: PolicyRuleInput[]) {
+  return `You check prompts for a video and image studio used by the Egyptian Ministry of Awqaf. You do not rewrite, translate or improve them.
 
 Content policy (each rule has an id and an action):
 ${rules.map((r) => `- [${r.id}] (${r.action}) ${r.name}: ${r.description}`).join('\n')}
@@ -29,9 +32,8 @@ ${rules.map((r) => `- [${r.id}] (${r.action}) ${r.name}: ${r.description}`).join
 Do this:
 1. Detect the prompt language. Users usually write in Egyptian or Modern Standard Arabic.
 2. Decide if the prompt breaks a rule. A "block" rule match means allowed=false. A "review" rule match keeps allowed=true but sets needs_review=true. Only flag real matches, not loose associations.
-3. If allowed, fill enhanced_prompt with the user's prompt exactly as written when it is in English. When it is in another language, translate it into English literally and faithfully: add nothing, remove nothing, no extra description or style words.${editImage ? ' Preserve any image numbers and the requested role of each reference.' : ''}
-4. If blocked, leave enhanced_prompt empty and write safe_alternative: an English prompt that keeps the moment but removes what broke the rule (for example, show the place with no people).
-5. reason_en and reason_ar: one short sentence each explaining a block or review to the user. Empty if fine.`
+3. If blocked, write safe_alternative: the same prompt, in the same language and dialect as the user's, that keeps the moment but removes what broke the rule (for example, show the place with no people). Empty if allowed.
+4. reason_en and reason_ar: one short sentence each explaining a block or review to the user. Empty if fine.`
 }
 
 const reviewSchema = {
@@ -42,27 +44,23 @@ const reviewSchema = {
     rule_ids: { type: 'ARRAY', items: { type: 'INTEGER' } },
     reason_en: { type: 'STRING' },
     reason_ar: { type: 'STRING' },
-    enhanced_prompt: { type: 'STRING' },
     safe_alternative: { type: 'STRING' },
     source_language: { type: 'STRING', enum: ['ar', 'en', 'other'] },
   },
-  required: ['allowed', 'needs_review', 'rule_ids', 'reason_en', 'reason_ar', 'enhanced_prompt', 'safe_alternative', 'source_language'],
+  required: ['allowed', 'needs_review', 'rule_ids', 'reason_en', 'reason_ar', 'safe_alternative', 'source_language'],
 }
 
 const isArabic = (s: string) => /[؀-ۿ]/.test(s)
 
-export async function reviewPrompt(prompt: string, rules: PolicyRuleInput[], editImage = false): Promise<PromptReview> {
+export async function reviewPrompt(prompt: string, rules: PolicyRuleInput[]): Promise<PromptReview> {
   if (config.mock) {
     return {
       allowed: true, needsReview: false, ruleIds: [], reasonEn: '', reasonAr: '',
-      enhancedPrompt: isArabic(prompt)
-        ? '[Mock translation] Cinematic shot of the scene described, warm golden light, slow dolly forward, shallow depth of field'
-        : prompt.trim(),
-      safeAlternative: '', sourceLanguage: isArabic(prompt) ? 'ar' : 'en',
+      enhancedPrompt: prompt.trim(), safeAlternative: '', sourceLanguage: isArabic(prompt) ? 'ar' : 'en',
     }
   }
   const request = {
-    systemInstruction: { parts: [{ text: reviewInstruction(rules, editImage) }] },
+    systemInstruction: { parts: [{ text: reviewInstruction(rules) }] },
     contents: [{ role: 'user', parts: [{ text: prompt }] }],
     generationConfig: { responseMimeType: 'application/json', responseSchema: reviewSchema, temperature: 0.4 },
   }
@@ -80,7 +78,8 @@ export async function reviewPrompt(prompt: string, rules: PolicyRuleInput[], edi
   return {
     allowed: !!r.allowed, needsReview: !!r.needs_review, ruleIds: r.rule_ids ?? [],
     reasonEn: r.reason_en ?? '', reasonAr: r.reason_ar ?? '',
-    enhancedPrompt: r.enhanced_prompt ?? '', safeAlternative: r.safe_alternative ?? '',
+    // What gets generated: the user's own words, untouched.
+    enhancedPrompt: r.allowed ? prompt.trim() : '', safeAlternative: r.safe_alternative ?? '',
     sourceLanguage: r.source_language ?? 'other',
   }
 }
@@ -101,6 +100,10 @@ export async function generateVideo(
   if (config.mock) {
     await sleep(8000)
     return { mime: 'image/svg+xml', bytes: Buffer.from(mockSvg(prompt, params.durationSeconds, params.aspectRatio)) }
+  }
+  if (model.startsWith('fal-ai/')) {
+    if (video) throw new Error('Video editing needs an Omni model')
+    return generateFal(model, prompt, params, startFrame, endFrame)
   }
   if (model.startsWith('gemini-omni-')) {
     return generateOmni(model, prompt, params, startFrame, references, video, endFrame)

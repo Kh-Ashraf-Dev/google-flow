@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ChangeEvent, ClipboardEvent, DragEvent, KeyboardEvent, ReactElement, ReactNode } from 'react'
 import { studioPath, type AppProps, type StudioView } from '../App.tsx'
-import { api, ApiError, clipSeconds, clock, fmt, isArabic, posterUrl, timeAgo, uploadStudioImage, type Character, type Check, type Collection, type Job, type Params, type ImageUpscaleSize, type PickedImage, type Project, upscaleLabel, type ReuseInputs, type Scene, type Source } from '../api.ts'
+import { api, ApiError, clipSeconds, clock, fmt, posterUrl, timeAgo, uploadStudioImage, type Character, type Check, type Collection, type Job, type Params, type ImageUpscaleSize, type PickedImage, type Project, upscaleLabel, type ReuseInputs, type Scene, type Source } from '../api.ts'
 import { SceneBuilder } from './Scene.tsx'
 import { CropImage } from './CropImage.tsx'
 import { AssetPicker, ASSET_CATEGORIES } from './AssetPicker.tsx'
@@ -1072,11 +1072,10 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
     const id = ++pendingId.current
     // Show a card right away: the content check and job setup take a few seconds.
     setPending((list) => [{ id, prompt: text, kind, count: (images.length && imageMode === 'separate' ? images.length : 1) * videoCount }, ...list])
-    const editsMedia = editImages.length > 0 || source?.mode === 'edit'
     // The server accepts a check for 30 minutes; a kept one is checked again before that.
     const reuse = check && checkedText.current === text && Date.now() - checkedAt.current < 25 * 60 * 1000 ? check : null
     try {
-      const checked = reuse ?? await api<Check>('/prompt/check', { prompt: text, editImage: editsMedia })
+      const checked = reuse ?? await api<Check>('/prompt/check', { prompt: text })
       if (!reuse) { checkedAt.current = Date.now(); checkedText.current = text }
       const checkedPrompt = reuse ? finalPrompt : checked.enhancedPrompt
       setCheck(checked)
@@ -1144,9 +1143,12 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
       ...(c.endFrameDuration ? ['Start → End'] : []),
       ...(c.referenceDuration !== undefined ? ['Ingredients'] : []),
       ...(canEditVideo(p.model_key) ? ['Edit video'] : []),
+      ...(c.provider ? [c.provider] : []),
     ]
     return { key: p.model_key, label: p.label, price: modelPrice(p), tags, blocked }
-  })
+  }).concat((me.upcoming ?? []).filter((p) => p.kind === kind).map((p) => ({
+    key: p.model_key, label: p.label, price: `${p.credits_per_second} cr/s`, tags: [p.provider], blocked: 'After agreement',
+  })))
   // One short line under the tray says what the attached items will make.
   const attachHint = (() => {
     if (kind === 'image') {
@@ -1659,7 +1661,6 @@ export function Studio({ me, refreshMe, navigate, projectId, view }: AppProps & 
                 })}
               </div>
               <span>{left != null ? `${fmt(left)} left today` : `${fmt(me.balance)} left`}</span>
-              {isArabic(prompt) && <span>Arabic · translated word for word</span>}
               <span className="flow-disclaimer">AI can make mistakes</span>
             </div>
           </div>

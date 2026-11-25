@@ -183,16 +183,20 @@ async function loadSource(userId: number, jobId: number, assetId?: number, kind?
       throw new JobError(`Couldn’t read the last frame of that clip (${(err as Error).message})`)
     }
   }
-  return { jobId, mode: 'animate', frame: await imageForModel(asset), name: asset.name ?? undefined }
+  // An unnamed image goes by the name the @ list shows for it (image163), so a mention still says
+  // which picture it means.
+  return { jobId, mode: 'animate', frame: await imageForModel(asset), name: asset.name ?? `${job.kind}${asset.id}` }
 }
 
-// "@Name" in the prompt reads as plain "Name" to the model, and named images it gets as references
-// are listed in order, so "@Ahmed in front of @Mosque" says which image is which.
+// "@Name" in the prompt reads as plain "Name" to the model, and the images it gets together are
+// listed in order with their names, so "@Ahmed in front of @Mosque" says which image is which.
+// A character's images carry the character's name.
 function withImageNames(prompt: string, names: (string | undefined)[]) {
   let text = prompt
+  const mentioned = names.some((name) => name && text.includes(`@${name}`))
   for (const name of names) if (name) text = text.split(`@${name}`).join(name)
   text = text.replace(/(^|\s)@(?=\S)/g, '$1')
-  if (!names.some(Boolean)) return text
+  if (!names.some(Boolean) || (!mentioned && names.length < 2)) return text
   const lines = names.map((name, index) => `- Image ${index + 1}${name ? `: ${name}` : ''}`)
   return `${text}\n\nThe reference images, in the order given:\n${lines.join('\n')}`
 }
@@ -288,6 +292,7 @@ export async function createJobs(userId: number, input: CreateJobInput) {
   }
   const r = rule(params.modelKey)
   const model = modelId(params.modelKey)
+  if (model.startsWith('fal-ai/') && !config.mock && !config.falKey) throw new JobError('fal.ai isn’t set up yet. Choose a Google model for now.')
   const videoCount = r.kind === 'video' ? Math.min(Math.max(Math.round(Number(input.params.count) || 1), 1), MAX_VIDEOS_PER_GENERATE) : 1
   const cost = estimate(params)
   if (input.sceneId != null) {
@@ -318,8 +323,11 @@ export async function createJobs(userId: number, input: CreateJobInput) {
     : characterReferences ? characterFrames : []
   if (references.length > 3) throw new JobError('A video takes at most 3 reference images, counting the characters’ images. Remove an image or a character.')
   // Names only matter where images go to the model together: edit/combine and references.
-  const namedImages = r.kind === 'image' ? edits.map((item) => item.name)
-    : images?.mode === 'references' ? selected.map((item) => item.name) : []
+  // They follow the order the images are sent in (imageSources, references).
+  const characterNames = characters.list.flatMap((c) => c.frames.map(() => c.name))
+  const namedImages = r.kind === 'image' ? [...edits.map((item) => item.name), ...characterNames]
+    : images?.mode === 'references' ? [...selected.map((item) => item.name), ...characterNames]
+    : characterReferences ? characterNames : []
   const modelText = withCharacters(withImageNames(finalPrompt, namedImages), characters.list, r.kind === 'video')
   const inputs: JobInputs = {
     editImages: editInputs.length ? editInputs.map(({ jobId, assetId }) => ({ jobId, assetId })) : undefined,

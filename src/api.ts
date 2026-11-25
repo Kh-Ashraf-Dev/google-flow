@@ -17,13 +17,18 @@ export type PricingRule = {
     // Takes a start and an end image; the clip is this many seconds.
     endFrameDuration?: number | { max: number }
     fullLengthOnly: ('360p' | '720p' | '1080p' | '4k')[]
+    provider?: 'fal.ai'
   }
 }
+
+// Shown in the model picker, greyed out until the client agrees to them.
+export type UpcomingModel = { model_key: string; label: string; kind: 'video' | 'image'; credits_per_second: number; provider: string }
 
 export type Allowance = { limit: number | null; extra: number; spent: number; remaining: number | null }
 
 export type Me = {
   user: User; balance: number; spentToday: number; allowance: Allowance; mock: boolean; pricing: PricingRule[]
+  upcoming: UpcomingModel[]
   imageUpscale: { size: ImageUpscaleSize; credits: number }[]
 }
 

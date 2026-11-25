@@ -13,7 +13,7 @@ import * as ledger from './ledger.ts'
 import { frameAt, joinClips } from './media.ts'
 import { hashBcryptPassword, isBcryptHash, isValidNewPassword } from './passwords.ts'
 import { checkPrompt } from './policy.ts'
-import { estimate, IMAGE_UPSCALE_SIZES, imageUpscaleCredits, loadPricing, type ImageUpscaleSize, normalize, pricingRules, upscaleOptions, type GenerationParams, type Resolution } from './pricing.ts'
+import { estimate, IMAGE_UPSCALE_SIZES, imageUpscaleCredits, loadPricing, type ImageUpscaleSize, normalize, pricingRules, UPCOMING_MODELS, upscaleOptions, type GenerationParams, type Resolution } from './pricing.ts'
 import { mp4Seconds } from './provider.ts'
 import { VOICES, voicePreset, voiceSample, voiceText } from './voices.ts'
 
@@ -101,6 +101,7 @@ api.get('/me', async (c) => {
     allowance: await ledger.dailyAllowance(user.id),
     mock: config.mock,
     pricing: pricingRules(),
+    upcoming: UPCOMING_MODELS,
     imageUpscale: IMAGE_UPSCALE_SIZES.map((size) => ({ size, credits: imageUpscaleCredits(size) })),
   })
 })
@@ -112,9 +113,9 @@ api.post('/estimate', async (c) => {
 
 api.post('/prompt/check', async (c) => {
   const user = c.get('user')
-  const { prompt, editImage } = await c.req.json<{ prompt: string; editImage?: boolean }>()
+  const { prompt } = await c.req.json<{ prompt: string }>()
   if (!prompt?.trim()) return c.json({ error: 'Write a prompt first' }, 400)
-  const check = await checkPrompt(user.id, prompt.trim(), editImage === true)
+  const check = await checkPrompt(user.id, prompt.trim())
   if (!check.allowed) await recordBlocked(user.id, prompt.trim(), check)
   return c.json(check)
 })

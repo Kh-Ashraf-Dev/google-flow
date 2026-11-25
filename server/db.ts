@@ -228,6 +228,10 @@ const PRICING: [string, string, 'video' | 'image', number | null, number | null,
   ['omni-flash-1.2', 'Gemini Omni 1.2 Flash', 'video', 1, 2, null, 0.07],
   ['omni-flash', 'Gemini Omni 1.1 Flash Preview', 'video', 2, 2, null, 0.10136],
   ['veo-3.1', 'Veo 3.1 Quality', 'video', 5, 5, null, 0.4],
+  // fal.ai (model pages, 2026-11-24): Kling 3 Standard without audio $0.084/s; Wan 2.5 $0.10/s
+  // at 720p and $0.15/s at 1080p.
+  ['kling-3-standard', 'Kling 3 Standard', 'video', 2, 2, null, 0.084],
+  ['wan-2.5', 'Wan 2.5', 'video', 2, 2, null, 0.1],
   ['nano-banana-2-lite', 'Nano Banana 2 Lite', 'image', null, null, 1, 0.0336],
   ['nano-banana-2.1', 'Nano Banana 2.1', 'image', null, null, 1, 0.0336],
   ['nano-banana', 'Nano Banana', 'image', null, null, 1, 0.039],

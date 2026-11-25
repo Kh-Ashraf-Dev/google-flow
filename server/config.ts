@@ -34,8 +34,13 @@ export const config = {
       'nano-banana': 'gemini-2.5-flash-image',
       'gemini-image': process.env.IMAGE_MODEL ?? 'gemini-3.1-flash-image',
       'nano-banana-pro': 'gemini-3-pro-image',
+      // fal.ai endpoints, without the /text-to-video or /image-to-video part (server/fal.ts).
+      'wan-2.5': 'fal-ai/wan-25-preview',
+      'kling-3-standard': 'fal-ai/kling-video/v3/standard',
     } as Record<string, string>,
   },
+  // fal.ai key for Wan 2.5 and Kling 3 Standard. Without it those two models fail with a clear error.
+  falKey: process.env.FAL_KEY ?? '',
   vertex: {
     keyJson: vertexKey,
     location: process.env.VERTEX_LOCATION ?? 'us-central1',

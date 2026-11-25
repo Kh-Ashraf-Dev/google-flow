@@ -22,8 +22,8 @@ export async function keywordHit(text: string): Promise<string | undefined> {
 }
 
 // Layer 1 is the ministry's blocklist (instant, free). Layer 2 is Gemini Flash on Vertex AI reading the
-// prompt against the rules; the same call translates and improves Arabic prompts.
-export async function checkPrompt(userId: number, prompt: string, editImage = false): Promise<CheckResult> {
+// prompt against the rules. The prompt itself is not translated or changed.
+export async function checkPrompt(userId: number, prompt: string): Promise<CheckResult> {
   const rules = await activeRules()
   const kw = await keywordHit(prompt)
   let review: PromptReview
@@ -36,12 +36,8 @@ export async function checkPrompt(userId: number, prompt: string, editImage = fa
     }
     blockedBy = 'keyword'
   } else {
-    review = await reviewPrompt(prompt, rules, editImage)
+    review = await reviewPrompt(prompt, rules)
     if (!review.allowed) blockedBy = 'ai'
-    else if (await keywordHit(review.enhancedPrompt)) {
-      review = { ...review, allowed: false, reasonEn: 'The rewritten prompt hit the blocklist.', reasonAr: 'البرومبت بعد التعديل فيه كلمة ممنوعة.' }
-      blockedBy = 'keyword'
-    }
   }
   const matched = rules.filter((r) => review.ruleIds.includes(r.id)).map((r) => ({ id: r.id, name: r.name, action: r.action }))
   const checkId = await db.insert(`INSERT INTO prompt_checks (user_id, prompt, enhanced, allowed, result, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
